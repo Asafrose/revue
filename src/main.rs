@@ -7,8 +7,8 @@ mod ui;
 use anyhow::Result;
 use app::{App, Mode};
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    MouseButton, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::DefaultTerminal;
@@ -70,8 +70,8 @@ pub(crate) fn handle_event(app: &mut App, event: Event, frame_size: ratatui::lay
             app.status_message = None;
             match app.mode {
                 Mode::Normal => handle_normal_key(app, key.code),
-                Mode::Commenting => handle_commenting_key(app, key.code),
-                Mode::Summary => handle_summary_key(app, key.code),
+                Mode::Commenting => handle_commenting_key(app, key),
+                Mode::Summary => handle_summary_key(app, key),
             }
         }
         Event::Mouse(mouse) if app.mode == Mode::Normal => {
@@ -85,8 +85,9 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('s') => {
+            let summary = app.summary.clone();
+            app.start_input(&summary);
             app.mode = Mode::Summary;
-            app.input_buffer = app.summary.clone();
         }
         KeyCode::Char('S') => submit_review(app),
         KeyCode::Up | KeyCode::Char('k') => {
@@ -130,34 +131,34 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
     }
 }
 
-fn handle_commenting_key(app: &mut App, code: KeyCode) {
-    match code {
+fn handle_commenting_key(app: &mut App, key: KeyEvent) {
+    match key.code {
         KeyCode::Enter => app.submit_comment(),
         KeyCode::Esc => {
-            app.input_buffer.clear();
+            app.clear_input();
             app.commenting_line = None;
             app.mode = Mode::Normal;
         }
-        KeyCode::Char(c) => app.input_buffer.push(c),
-        KeyCode::Backspace => {
-            app.input_buffer.pop();
+        _ => {
+            if let Some(textarea) = &mut app.textarea {
+                textarea.input(key);
+            }
         }
-        _ => {}
     }
 }
 
-fn handle_summary_key(app: &mut App, code: KeyCode) {
-    match code {
+fn handle_summary_key(app: &mut App, key: KeyEvent) {
+    match key.code {
         KeyCode::Enter => app.submit_summary(),
         KeyCode::Esc => {
-            app.input_buffer.clear();
+            app.clear_input();
             app.mode = Mode::Normal;
         }
-        KeyCode::Char(c) => app.input_buffer.push(c),
-        KeyCode::Backspace => {
-            app.input_buffer.pop();
+        _ => {
+            if let Some(textarea) = &mut app.textarea {
+                textarea.input(key);
+            }
         }
-        _ => {}
     }
 }
 
@@ -212,7 +213,7 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
         if let Some(line_idx) = map_row_to_diff_line(app, clicked_row) {
             app.commenting_line = Some(line_idx);
             app.mode = Mode::Commenting;
-            app.input_buffer.clear();
+            app.start_input("");
         }
     }
 }
@@ -377,7 +378,7 @@ mod tests {
         app.summary = "existing summary".to_string();
         handle_event(&mut app, key_event(KeyCode::Char('s')), frame_size());
         assert_eq!(app.mode, Mode::Summary);
-        assert_eq!(app.input_buffer, "existing summary");
+        assert_eq!(app.input_text(), "existing summary");
     }
 
     // ── Normal mode: j/Down increases diff_scroll ────────────────────
@@ -491,9 +492,9 @@ mod tests {
         let mut app = make_test_app();
         app.mode = Mode::Commenting;
         app.commenting_line = Some(0);
-        app.input_buffer = "hel".to_string();
+        app.start_input("hel");
         handle_event(&mut app, key_event(KeyCode::Char('l')), frame_size());
-        assert_eq!(app.input_buffer, "hell");
+        assert_eq!(app.input_text(), "hell");
     }
 
     // ── Commenting mode: Backspace removes last char ─────────────────
@@ -503,9 +504,9 @@ mod tests {
         let mut app = make_test_app();
         app.mode = Mode::Commenting;
         app.commenting_line = Some(0);
-        app.input_buffer = "hello".to_string();
+        app.start_input("hello");
         handle_event(&mut app, key_event(KeyCode::Backspace), frame_size());
-        assert_eq!(app.input_buffer, "hell");
+        assert_eq!(app.input_text(), "hell");
     }
 
     // ── Commenting mode: Esc cancels ─────────────────────────────────
@@ -515,9 +516,9 @@ mod tests {
         let mut app = make_test_app();
         app.mode = Mode::Commenting;
         app.commenting_line = Some(2);
-        app.input_buffer = "some partial comment".to_string();
+        app.start_input("some partial comment");
         handle_event(&mut app, key_event(KeyCode::Esc), frame_size());
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_none());
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.commenting_line.is_none());
     }
@@ -529,10 +530,10 @@ mod tests {
         let mut app = make_test_app();
         app.mode = Mode::Commenting;
         app.commenting_line = Some(1);
-        app.input_buffer = "nice line".to_string();
+        app.start_input("nice line");
         handle_event(&mut app, key_event(KeyCode::Enter), frame_size());
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_none());
         assert!(app.commenting_line.is_none());
         let comments = app.comments.get("file1.rs").unwrap();
         assert_eq!(comments.len(), 1);
@@ -540,15 +541,15 @@ mod tests {
         assert_eq!(comments[0].text, "nice line");
     }
 
-    // ── Summary mode: Char appends to input_buffer ───────────────────
+    // ── Summary mode: Char appends to buffer ─────────────────────────
 
     #[test]
     fn summary_char_appends_to_buffer() {
         let mut app = make_test_app();
+        app.start_input("sum");
         app.mode = Mode::Summary;
-        app.input_buffer = "sum".to_string();
         handle_event(&mut app, key_event(KeyCode::Char('m')), frame_size());
-        assert_eq!(app.input_buffer, "summ");
+        assert_eq!(app.input_text(), "summ");
     }
 
     // ── Summary mode: Enter saves summary ────────────────────────────
@@ -556,12 +557,12 @@ mod tests {
     #[test]
     fn summary_enter_saves_summary() {
         let mut app = make_test_app();
+        app.start_input("my review summary");
         app.mode = Mode::Summary;
-        app.input_buffer = "my review summary".to_string();
         handle_event(&mut app, key_event(KeyCode::Enter), frame_size());
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.summary, "my review summary");
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_none());
     }
 
     // ── Summary mode: Esc cancels ────────────────────────────────────
@@ -570,11 +571,11 @@ mod tests {
     fn summary_esc_cancels() {
         let mut app = make_test_app();
         app.summary = "old summary".to_string();
+        app.start_input("new draft");
         app.mode = Mode::Summary;
-        app.input_buffer = "new draft".to_string();
         handle_event(&mut app, key_event(KeyCode::Esc), frame_size());
         assert_eq!(app.mode, Mode::Normal);
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_none());
         // Original summary should be unchanged
         assert_eq!(app.summary, "old summary");
     }
@@ -604,7 +605,8 @@ mod tests {
         handle_event(&mut app, mouse_click(click_col, click_row), frame_size());
         assert_eq!(app.mode, Mode::Commenting);
         assert!(app.commenting_line.is_some());
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_some());
+        assert_eq!(app.input_text(), "");
     }
 
     // ── Mouse: events ignored when not in Normal mode ────────────────
@@ -767,13 +769,13 @@ mod tests {
     // ── Commenting mode: unknown key does nothing ─────────────────────
 
     #[test]
-    fn commenting_unknown_key_does_nothing() {
+    fn commenting_unknown_key_forwarded_to_textarea() {
         let mut app = make_test_app();
         app.mode = Mode::Commenting;
         app.commenting_line = Some(0);
-        app.input_buffer = "text".to_string();
+        app.start_input("text");
         handle_event(&mut app, key_event(KeyCode::F(1)), frame_size());
-        assert_eq!(app.input_buffer, "text");
+        // TextArea handles or ignores keys — mode stays Commenting
         assert_eq!(app.mode, Mode::Commenting);
     }
 
@@ -782,21 +784,21 @@ mod tests {
     #[test]
     fn summary_backspace_removes_last_char() {
         let mut app = make_test_app();
+        app.start_input("hello");
         app.mode = Mode::Summary;
-        app.input_buffer = "hello".to_string();
         handle_event(&mut app, key_event(KeyCode::Backspace), frame_size());
-        assert_eq!(app.input_buffer, "hell");
+        assert_eq!(app.input_text(), "hell");
     }
 
-    // ── Summary mode: unknown key does nothing ────────────────────────
+    // ── Summary mode: unknown key forwarded to textarea ───────────────
 
     #[test]
-    fn summary_unknown_key_does_nothing() {
+    fn summary_unknown_key_forwarded_to_textarea() {
         let mut app = make_test_app();
+        app.start_input("text");
         app.mode = Mode::Summary;
-        app.input_buffer = "text".to_string();
         handle_event(&mut app, key_event(KeyCode::F(1)), frame_size());
-        assert_eq!(app.input_buffer, "text");
+        // TextArea handles or ignores keys — mode stays Summary
         assert_eq!(app.mode, Mode::Summary);
     }
 

@@ -4,7 +4,10 @@ use crate::git::ChangeType;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Wrap,
+};
 use ratatui::Frame;
 
 /// Width of the file list sidebar
@@ -146,17 +149,19 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Show input line if commenting on this line
         if app.mode == Mode::Commenting && app.commenting_line == Some(idx) {
+            let text = app.input_text();
             lines.push(Line::from(vec![
                 Span::styled("       > ", Style::default().fg(Color::Yellow)),
-                Span::styled(app.input_buffer.clone(), Style::default().fg(Color::Yellow)),
+                Span::styled(text, Style::default().fg(Color::Yellow)),
                 Span::styled("_", Style::default().fg(Color::Yellow)),
             ]));
         }
     }
 
     // Apply scroll (clamp and write back so future scroll-up works immediately)
+    let total_lines = lines.len();
     let visible_height = inner.height as usize;
-    let max_scroll = lines.len().saturating_sub(visible_height);
+    let max_scroll = total_lines.saturating_sub(visible_height);
     app.diff_scroll = app.diff_scroll.min(max_scroll);
     let visible_lines: Vec<Line> = lines
         .into_iter()
@@ -166,6 +171,14 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
+
+    // Render scrollbar
+    if total_lines > visible_height {
+        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(visible_height))
+            .position(app.diff_scroll);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -193,7 +206,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Commenting => " typing comment... | Enter: save | Esc: cancel".to_string(),
         Mode::Summary => format!(
             " summary: {}_  | Enter: save | Esc: cancel",
-            app.input_buffer
+            app.input_text()
         ),
     };
 
@@ -465,7 +478,7 @@ mod tests {
         app.select_file_with_diff(0, Some(make_test_diff()));
         app.mode = Mode::Commenting;
         app.commenting_line = Some(0);
-        app.input_buffer = "my comment".to_string();
+        app.start_input("my comment");
 
         terminal.draw(|frame| render(frame, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -586,8 +599,8 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(vec![]);
+        app.start_input("my summary");
         app.mode = Mode::Summary;
-        app.input_buffer = "my summary".to_string();
 
         terminal.draw(|frame| render(frame, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();

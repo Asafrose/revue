@@ -11,6 +11,7 @@ crossterm = "0.28"
 arboard = "3"
 syntect = "5"
 anyhow = "1"
+tui-textarea = { version = "0.7", features = ["crossterm"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }

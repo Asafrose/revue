@@ -2,6 +2,7 @@ use crate::diff::FileDiff;
 use crate::git::ChangedFile;
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
+use tui_textarea::{CursorMove, TextArea};
 
 #[derive(Debug, Clone)]
 pub struct ReviewComment {
@@ -17,7 +18,7 @@ pub struct App {
     pub comments: HashMap<String, Vec<ReviewComment>>,
     pub summary: String,
     pub mode: Mode,
-    pub input_buffer: String,
+    pub textarea: Option<TextArea<'static>>,
     pub diff_scroll: usize,
     pub diff_hscroll: usize,
     pub commenting_line: Option<usize>,
@@ -46,7 +47,7 @@ impl App {
             comments: HashMap::new(),
             summary: String::new(),
             mode: Mode::Normal,
-            input_buffer: String::new(),
+            textarea: None,
             diff_scroll: 0,
             diff_hscroll: 0,
             commenting_line: None,
@@ -77,24 +78,48 @@ impl App {
         }
     }
 
+    pub fn input_text(&self) -> String {
+        self.textarea
+            .as_ref()
+            .map(|ta| ta.lines().join("\n"))
+            .unwrap_or_default()
+    }
+
+    pub fn start_input(&mut self, initial_text: &str) {
+        let lines = if initial_text.is_empty() {
+            vec!["".to_string()]
+        } else {
+            initial_text.lines().map(|l| l.to_string()).collect()
+        };
+        let mut textarea = TextArea::new(lines);
+        textarea.move_cursor(CursorMove::Bottom);
+        textarea.move_cursor(CursorMove::End);
+        self.textarea = Some(textarea);
+    }
+
+    pub fn clear_input(&mut self) {
+        self.textarea = None;
+    }
+
     pub fn submit_comment(&mut self) {
         if let (Some(line_idx), Some(file)) = (self.commenting_line, &self.current_file) {
-            if !self.input_buffer.is_empty() {
+            let text = self.input_text();
+            if !text.is_empty() {
                 let comment = ReviewComment {
                     line_index: line_idx,
-                    text: self.input_buffer.clone(),
+                    text,
                 };
                 self.comments.entry(file.clone()).or_default().push(comment);
             }
         }
-        self.input_buffer.clear();
+        self.clear_input();
         self.commenting_line = None;
         self.mode = Mode::Normal;
     }
 
     pub fn submit_summary(&mut self) {
-        self.summary = self.input_buffer.clone();
-        self.input_buffer.clear();
+        self.summary = self.input_text();
+        self.clear_input();
         self.mode = Mode::Normal;
     }
 
@@ -172,7 +197,7 @@ mod tests {
         assert_eq!(app.files.len(), 2);
         assert!(app.comments.is_empty());
         assert!(app.summary.is_empty());
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_none());
         assert_eq!(app.diff_scroll, 0);
         assert!(app.current_diff.is_none());
         assert!(app.current_file.is_none());
@@ -218,7 +243,7 @@ mod tests {
         let mut app = App::new(vec![make_test_file("a.rs")]);
         app.current_file = Some("a.rs".to_string());
         app.commenting_line = Some(5);
-        app.input_buffer = "looks good".to_string();
+        app.start_input("looks good");
         app.mode = Mode::Commenting;
 
         app.submit_comment();
@@ -234,7 +259,7 @@ mod tests {
         let mut app = App::new(vec![make_test_file("a.rs")]);
         app.current_file = Some("a.rs".to_string());
         app.commenting_line = Some(5);
-        app.input_buffer = String::new();
+        app.start_input("");
         app.mode = Mode::Commenting;
 
         app.submit_comment();
@@ -247,7 +272,7 @@ mod tests {
         let mut app = App::new(vec![make_test_file("a.rs")]);
         app.current_file = Some("a.rs".to_string());
         app.commenting_line = None;
-        app.input_buffer = "some text".to_string();
+        app.start_input("some text");
         app.mode = Mode::Commenting;
 
         app.submit_comment();
@@ -260,7 +285,7 @@ mod tests {
         let mut app = App::new(vec![make_test_file("a.rs")]);
         app.current_file = None;
         app.commenting_line = Some(5);
-        app.input_buffer = "some text".to_string();
+        app.start_input("some text");
         app.mode = Mode::Commenting;
 
         app.submit_comment();
@@ -273,12 +298,12 @@ mod tests {
         let mut app = App::new(vec![make_test_file("a.rs")]);
         app.current_file = Some("a.rs".to_string());
         app.commenting_line = Some(5);
-        app.input_buffer = "text".to_string();
+        app.start_input("text");
         app.mode = Mode::Commenting;
 
         app.submit_comment();
 
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_none());
         assert!(app.commenting_line.is_none());
         assert_eq!(app.mode, Mode::Normal);
     }
@@ -288,7 +313,7 @@ mod tests {
     #[test]
     fn submit_summary_sets_summary() {
         let mut app = App::new(vec![]);
-        app.input_buffer = "Overall looks great".to_string();
+        app.start_input("Overall looks great");
         app.mode = Mode::Summary;
 
         app.submit_summary();
@@ -297,20 +322,20 @@ mod tests {
     }
 
     #[test]
-    fn submit_summary_clears_input_buffer() {
+    fn submit_summary_clears_textarea() {
         let mut app = App::new(vec![]);
-        app.input_buffer = "summary text".to_string();
+        app.start_input("summary text");
         app.mode = Mode::Summary;
 
         app.submit_summary();
 
-        assert!(app.input_buffer.is_empty());
+        assert!(app.textarea.is_none());
     }
 
     #[test]
     fn submit_summary_returns_to_normal_mode() {
         let mut app = App::new(vec![]);
-        app.input_buffer = "text".to_string();
+        app.start_input("text");
         app.mode = Mode::Summary;
 
         app.submit_summary();
@@ -321,7 +346,7 @@ mod tests {
     #[test]
     fn submit_summary_empty_buffer_sets_empty_summary() {
         let mut app = App::new(vec![]);
-        app.input_buffer = String::new();
+        app.start_input("");
         app.mode = Mode::Summary;
 
         app.submit_summary();
