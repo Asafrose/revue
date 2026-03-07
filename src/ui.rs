@@ -182,12 +182,16 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     let content = match app.mode {
         Mode::Normal => {
-            let total_comments: usize = app.comments.values().map(|c| c.len()).sum();
-            let summary_indicator = if app.summary.is_empty() { "" } else { " | summary: done" };
-            format!(
-                " click: select file/line | s: summary | S: submit | q: quit | comments: {}{}",
-                total_comments, summary_indicator
-            )
+            if let Some(ref msg) = app.status_message {
+                msg.clone()
+            } else {
+                let total_comments: usize = app.comments.values().map(|c| c.len()).sum();
+                let summary_indicator = if app.summary.is_empty() { "" } else { " | summary: done" };
+                format!(
+                    " click: select | Tab/Shift-Tab: files | j/k: scroll | s: summary | S: submit | r: refresh | q: quit | comments: {}{}",
+                    total_comments, summary_indicator
+                )
+            }
         }
         Mode::Commenting => " typing comment... | Enter: save | Esc: cancel".to_string(),
         Mode::Summary => format!(
@@ -196,7 +200,14 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         ),
     };
 
+    let style = if app.status_message.is_some() && app.mode == Mode::Normal {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
+
     let paragraph = Paragraph::new(content)
+        .style(style)
         .block(block)
         .wrap(Wrap { trim: true });
     frame.render_widget(paragraph, area);
