@@ -1,3 +1,5 @@
+mod app;
+mod diff;
 mod git;
 
 use anyhow::Result;
