@@ -259,3 +259,235 @@ pub fn diff_area(frame_area: Rect) -> Rect {
         height: diff.height.saturating_sub(2),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use crate::diff::{DiffLine, FileDiff, Hunk, LineType};
+    use crate::git::{ChangeType, ChangedFile};
+    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+
+    fn buffer_contains(buffer: &Buffer, text: &str) -> bool {
+        let content: String = (0..buffer.area.height)
+            .flat_map(|y| {
+                let mut line: String = (0..buffer.area.width)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol().to_string())
+                    .collect();
+                line.push('\n');
+                line.chars().collect::<Vec<_>>()
+            })
+            .collect();
+        content.contains(text)
+    }
+
+    fn make_test_file(path: &str, change_type: ChangeType) -> ChangedFile {
+        ChangedFile {
+            path: path.to_string(),
+            change_type,
+            additions: 5,
+            deletions: 3,
+        }
+    }
+
+    fn make_test_diff() -> FileDiff {
+        FileDiff {
+            hunks: vec![Hunk {
+                header: "@@ -1,3 +1,4 @@".to_string(),
+                lines: vec![
+                    DiffLine {
+                        line_type: LineType::Context,
+                        content: "unchanged".to_string(),
+                        old_line_no: Some(1),
+                        new_line_no: Some(1),
+                    },
+                    DiffLine {
+                        line_type: LineType::Deletion,
+                        content: "old line".to_string(),
+                        old_line_no: Some(2),
+                        new_line_no: None,
+                    },
+                    DiffLine {
+                        line_type: LineType::Addition,
+                        content: "new line".to_string(),
+                        old_line_no: None,
+                        new_line_no: Some(2),
+                    },
+                ],
+            }],
+        }
+    }
+
+    // ── short_path tests ─────────────────────────────────────────────
+
+    #[test]
+    fn short_path_short_unchanged() {
+        assert_eq!(short_path("src/main.rs"), "src/main.rs");
+    }
+
+    #[test]
+    fn short_path_long_returns_filename() {
+        assert_eq!(
+            short_path("some/very/deeply/nested/directory/structure/file.rs"),
+            "file.rs"
+        );
+    }
+
+    #[test]
+    fn short_path_long_no_slash_returns_whole() {
+        let path = "a_really_long_filename_without_slashes.rs";
+        assert_eq!(short_path(path), path);
+    }
+
+    #[test]
+    fn short_path_exactly_20_chars_unchanged() {
+        // exactly 20 characters
+        let path = "12345678901234567890";
+        assert_eq!(path.len(), 20);
+        assert_eq!(short_path(path), path);
+    }
+
+    #[test]
+    fn short_path_21_chars_with_slash_returns_filename() {
+        // 21 characters with a slash
+        let path = "abcdefghij/1234567890";
+        assert_eq!(path.len(), 21);
+        assert_eq!(short_path(path), "1234567890");
+    }
+
+    // ── file_list_area tests ─────────────────────────────────────────
+
+    #[test]
+    fn file_list_area_standard_frame() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let area = file_list_area(frame);
+        assert_eq!(area.width, 30);
+    }
+
+    #[test]
+    fn file_list_area_x_is_frame_width_minus_30() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let area = file_list_area(frame);
+        assert_eq!(area.x, 80 - 30);
+    }
+
+    #[test]
+    fn file_list_area_height_is_frame_height_minus_3() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let area = file_list_area(frame);
+        assert_eq!(area.height, 24 - 3);
+    }
+
+    // ── diff_area tests ──────────────────────────────────────────────
+
+    #[test]
+    fn diff_area_standard_frame() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let area = diff_area(frame);
+        // inner rect: inside the diff block borders
+        assert!(area.width > 0);
+        assert!(area.height > 0);
+    }
+
+    #[test]
+    fn diff_area_width_is_frame_minus_sidebar_minus_borders() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let area = diff_area(frame);
+        // diff panel width = 80 - 30 = 50, inner = 50 - 2 = 48
+        assert_eq!(area.width, 80 - 30 - 2);
+    }
+
+    #[test]
+    fn diff_area_height_is_frame_minus_status_minus_borders() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let area = diff_area(frame);
+        // main height = 24 - 3 = 21, inner = 21 - 2 = 19
+        assert_eq!(area.height, 24 - 3 - 2);
+    }
+
+    #[test]
+    fn diff_area_position() {
+        let frame = Rect::new(0, 0, 80, 24);
+        let area = diff_area(frame);
+        assert_eq!(area.x, 1);
+        assert_eq!(area.y, 1);
+    }
+
+    // ── render tests (TestBackend) ───────────────────────────────────
+
+    #[test]
+    fn render_no_files_shows_no_file_selected() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![]);
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "No file selected"));
+        assert!(buffer_contains(&buffer, "Click a file to view its diff"));
+    }
+
+    #[test]
+    fn render_with_files_no_diff_shows_file_entries() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![
+            make_test_file("src/main.rs", ChangeType::Modified),
+            make_test_file("README.md", ChangeType::Added),
+        ];
+        let mut app = App::new(files);
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "src/main.rs"));
+        assert!(buffer_contains(&buffer, "README.md"));
+    }
+
+    #[test]
+    fn render_with_diff_shows_diff_content() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("src/main.rs", ChangeType::Modified)];
+        let mut app = App::new(files);
+        app.select_file_with_diff(0, Some(make_test_diff()));
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "+new line"));
+        assert!(buffer_contains(&buffer, "-old line"));
+    }
+
+    #[test]
+    fn render_commenting_mode_shows_input() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("src/main.rs", ChangeType::Modified)];
+        let mut app = App::new(files);
+        app.select_file_with_diff(0, Some(make_test_diff()));
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(0);
+        app.input_buffer = "my comment".to_string();
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "my comment"));
+        assert!(buffer_contains(&buffer, "_")); // cursor
+    }
+
+    #[test]
+    fn render_with_status_message_shows_in_status_bar() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![]);
+        app.status_message = Some("Review submitted!".to_string());
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "Review submitted!"));
+    }
+}
