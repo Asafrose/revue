@@ -16,7 +16,6 @@ pub struct DiffLine {
 
 #[derive(Debug, Clone)]
 pub struct Hunk {
-    pub header: String,
     pub lines: Vec<DiffLine>,
 }
 
@@ -28,7 +27,6 @@ pub struct FileDiff {
 pub fn parse_diff(raw: &str) -> FileDiff {
     let mut hunks = Vec::new();
     let mut current_lines: Vec<DiffLine> = Vec::new();
-    let mut current_header = String::new();
     let mut old_line: usize = 0;
     let mut new_line: usize = 0;
 
@@ -36,11 +34,9 @@ pub fn parse_diff(raw: &str) -> FileDiff {
         if line.starts_with("@@") {
             if !current_lines.is_empty() {
                 hunks.push(Hunk {
-                    header: current_header.clone(),
                     lines: std::mem::take(&mut current_lines),
                 });
             }
-            current_header = line.to_string();
 
             if let Some((o, n)) = parse_hunk_header(line) {
                 old_line = o;
@@ -86,7 +82,6 @@ pub fn parse_diff(raw: &str) -> FileDiff {
 
     if !current_lines.is_empty() {
         hunks.push(Hunk {
-            header: current_header,
             lines: current_lines,
         });
     }

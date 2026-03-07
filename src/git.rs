@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::process::Command;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ChangedFile {
     pub path: String,
     pub change_type: ChangeType,

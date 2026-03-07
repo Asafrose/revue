@@ -285,7 +285,6 @@ mod tests {
         let mut app = App::new(files);
         let diff = FileDiff {
             hunks: vec![Hunk {
-                header: "@@ -1,3 +1,4 @@".to_string(),
                 lines: vec![
                     DiffLine {
                         line_type: LineType::HunkHeader,

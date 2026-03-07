@@ -85,7 +85,6 @@ mod tests {
     fn make_diff() -> FileDiff {
         FileDiff {
             hunks: vec![Hunk {
-                header: "@@ -1,3 +1,3 @@".to_string(),
                 lines: vec![
                     DiffLine {
                         line_type: LineType::Context,

@@ -55,10 +55,6 @@ impl App {
         }
     }
 
-    pub fn selected_file(&self) -> Option<&ChangedFile> {
-        self.file_list_state.selected().and_then(|i| self.files.get(i))
-    }
-
     /// Select a file by index and set its diff data.
     /// The caller is responsible for loading the diff.
     pub fn select_file_with_diff(&mut self, index: usize, diff: Option<FileDiff>) {
@@ -128,7 +124,6 @@ mod tests {
     fn make_test_diff() -> FileDiff {
         FileDiff {
             hunks: vec![Hunk {
-                header: "@@ -1,3 +1,4 @@".to_string(),
                 lines: vec![
                     DiffLine {
                         line_type: LineType::Context,
@@ -187,21 +182,6 @@ mod tests {
         assert!(app.commenting_line.is_none());
         assert!(!app.should_quit);
         assert!(app.status_message.is_none());
-    }
-
-    // ── App::selected_file ─────────────────────────────────────────────
-
-    #[test]
-    fn selected_file_with_selection_returns_correct_file() {
-        let app = App::new(vec![make_test_file("a.rs"), make_test_file("b.rs")]);
-        let file = app.selected_file().unwrap();
-        assert_eq!(file.path, "a.rs");
-    }
-
-    #[test]
-    fn selected_file_empty_files_returns_none() {
-        let app = App::new(vec![]);
-        assert!(app.selected_file().is_none());
     }
 
     // ── App::select_file_with_diff ─────────────────────────────────────
