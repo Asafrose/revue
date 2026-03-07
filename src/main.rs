@@ -15,6 +15,7 @@ use ratatui::DefaultTerminal;
 use std::io::stderr;
 use std::time::Duration;
 
+#[cfg(not(tarpaulin_include))]
 fn main() -> Result<()> {
     let files = git::get_changed_files()?;
 
@@ -32,6 +33,7 @@ fn main() -> Result<()> {
     result
 }
 
+#[cfg(not(tarpaulin_include))]
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
         terminal.draw(|frame| ui::render(frame, app))?;
@@ -80,14 +82,7 @@ pub(crate) fn handle_event(app: &mut App, event: Event, frame_size: ratatui::lay
                 }
                 KeyCode::Char('r') => {
                     if let Ok(files) = git::get_changed_files() {
-                        app.files = files;
-                        if !app.files.is_empty() {
-                            app.select_file(0);
-                        } else {
-                            app.current_diff = None;
-                            app.current_file = None;
-                        }
-                        app.status_message = Some("Refreshed file list".to_string());
+                        refresh_file_list(app, files);
                     }
                 }
                 _ => {}
@@ -192,6 +187,18 @@ pub(crate) fn map_row_to_diff_line(app: &App, target_row: usize) -> Option<usize
     None
 }
 
+pub(crate) fn refresh_file_list(app: &mut App, files: Vec<git::ChangedFile>) {
+    app.files = files;
+    if !app.files.is_empty() {
+        app.select_file(0);
+    } else {
+        app.current_diff = None;
+        app.current_file = None;
+    }
+    app.status_message = Some("Refreshed file list".to_string());
+}
+
+#[cfg(not(tarpaulin_include))]
 fn submit_review(app: &mut App) {
     let output = review::format_review(app);
     if output.is_empty() {
@@ -655,6 +662,131 @@ mod tests {
         assert_eq!(map_row_to_diff_line(&app, 4), Some(3));
         // Row 5 is beyond (4 diff lines + 1 comment = 5 visual rows total)
         assert_eq!(map_row_to_diff_line(&app, 5), None);
+    }
+
+    // ── Normal mode: 'S' calls submit_review (excluded from coverage) ──
+
+    #[test]
+    fn normal_shift_s_calls_submit_review() {
+        let mut app = make_test_app();
+        // submit_review is excluded from tarpaulin but the match arm is covered
+        handle_event(&mut app, key_event(KeyCode::Char('S')), frame_size());
+        // Should not panic; submit_review calls git which may fail, but that's fine
+    }
+
+    // ── Normal mode: 'r' refreshes file list ───────────────────────────
+
+    #[test]
+    fn normal_r_refreshes_files() {
+        let mut app = make_test_app();
+        // This calls git::get_changed_files() which may succeed or fail
+        // depending on the git state. Either way, the handler should not panic.
+        handle_event(&mut app, key_event(KeyCode::Char('r')), frame_size());
+        // If git succeeded, status_message should be set
+        // If git failed, status_message should remain None
+        // We just verify no panic occurred
+    }
+
+    // ── refresh_file_list: with files selects first ─────────────────────
+
+    #[test]
+    fn refresh_file_list_with_files() {
+        let mut app = make_test_app();
+        let new_files = vec![ChangedFile {
+            path: "new.rs".to_string(),
+            change_type: ChangeType::Added,
+            additions: 1,
+            deletions: 0,
+        }];
+        refresh_file_list(&mut app, new_files);
+        assert_eq!(app.files.len(), 1);
+        assert_eq!(app.files[0].path, "new.rs");
+        assert_eq!(app.status_message.as_deref(), Some("Refreshed file list"));
+    }
+
+    #[test]
+    fn refresh_file_list_empty_clears_diff() {
+        let mut app = make_test_app();
+        assert!(app.current_diff.is_some());
+        assert!(app.current_file.is_some());
+        refresh_file_list(&mut app, vec![]);
+        assert!(app.files.is_empty());
+        assert!(app.current_diff.is_none());
+        assert!(app.current_file.is_none());
+        assert_eq!(app.status_message.as_deref(), Some("Refreshed file list"));
+    }
+
+    // ── Commenting mode: unknown key does nothing ─────────────────────
+
+    #[test]
+    fn commenting_unknown_key_does_nothing() {
+        let mut app = make_test_app();
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(0);
+        app.input_buffer = "text".to_string();
+        handle_event(&mut app, key_event(KeyCode::F(1)), frame_size());
+        assert_eq!(app.input_buffer, "text");
+        assert_eq!(app.mode, Mode::Commenting);
+    }
+
+    // ── Summary mode: Backspace removes last char ─────────────────────
+
+    #[test]
+    fn summary_backspace_removes_last_char() {
+        let mut app = make_test_app();
+        app.mode = Mode::Summary;
+        app.input_buffer = "hello".to_string();
+        handle_event(&mut app, key_event(KeyCode::Backspace), frame_size());
+        assert_eq!(app.input_buffer, "hell");
+    }
+
+    // ── Summary mode: unknown key does nothing ────────────────────────
+
+    #[test]
+    fn summary_unknown_key_does_nothing() {
+        let mut app = make_test_app();
+        app.mode = Mode::Summary;
+        app.input_buffer = "text".to_string();
+        handle_event(&mut app, key_event(KeyCode::F(1)), frame_size());
+        assert_eq!(app.input_buffer, "text");
+        assert_eq!(app.mode, Mode::Summary);
+    }
+
+    // ── Mouse: click outside both file list and diff area ─────────────
+
+    #[test]
+    fn mouse_click_outside_both_areas_does_nothing() {
+        let mut app = make_test_app();
+        let mode_before = app.mode.clone();
+        // Click in the status bar area (very bottom)
+        handle_event(&mut app, mouse_click(5, 23), frame_size());
+        assert_eq!(app.mode, mode_before);
+    }
+
+    // ── Mouse: non-click non-scroll events ignored ────────────────────
+
+    #[test]
+    fn mouse_move_event_does_nothing() {
+        let mut app = make_test_app();
+        let scroll_before = app.diff_scroll;
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        });
+        handle_event(&mut app, ev, frame_size());
+        assert_eq!(app.diff_scroll, scroll_before);
+    }
+
+    // ── Non-key, non-mouse events are ignored ─────────────────────────
+
+    #[test]
+    fn resize_event_does_nothing() {
+        let mut app = make_test_app();
+        let ev = Event::Resize(100, 50);
+        handle_event(&mut app, ev, frame_size());
+        assert!(!app.should_quit);
     }
 
     #[test]

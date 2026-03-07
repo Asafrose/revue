@@ -12,5 +12,8 @@ arboard = "3"
 syntect = "5"
 anyhow = "1"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
+
 [dev-dependencies]
 pretty_assertions = "1"

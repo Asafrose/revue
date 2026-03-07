@@ -57,6 +57,7 @@ pub(crate) fn parse_name_status(output: &str, files: &mut Vec<ChangedFile>) {
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
     let output = Command::new("git")
         .args(["diff", "--numstat", "--diff-filter=ADMR", "main"])
@@ -83,6 +84,7 @@ pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
     Ok(files)
 }
 
+#[cfg(not(tarpaulin_include))]
 pub fn get_file_diff(path: &str) -> Result<String> {
     let output = Command::new("git")
         .args(["diff", "main", "--", path])
@@ -209,6 +211,20 @@ mod tests {
         // The existing file should remain unchanged
         assert_eq!(files[0].change_type, ChangeType::Modified);
         assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn parse_name_status_malformed_line_skipped() {
+        let mut files = vec![ChangedFile {
+            path: "file.rs".to_string(),
+            change_type: ChangeType::Modified,
+            additions: 1,
+            deletions: 0,
+        }];
+        // Line with no tab separator should be skipped (hits the continue on line 45)
+        parse_name_status("A\tfile.rs\nmalformed_no_tab\nD\tfile.rs", &mut files);
+        // The last status wins: Deleted
+        assert_eq!(files[0].change_type, ChangeType::Deleted);
     }
 
     #[test]

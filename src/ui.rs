@@ -479,6 +479,158 @@ mod tests {
     }
 
     #[test]
+    fn render_deleted_file_shows_d_indicator() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("removed.rs", ChangeType::Deleted)];
+        let mut app = App::new(files);
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "D "));
+    }
+
+    #[test]
+    fn render_renamed_file_shows_r_indicator() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("renamed.rs", ChangeType::Renamed)];
+        let mut app = App::new(files);
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "R "));
+    }
+
+    #[test]
+    fn render_file_with_comment_badge() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("src/main.rs", ChangeType::Modified)];
+        let mut app = App::new(files);
+        app.select_file_with_diff(0, Some(make_test_diff()));
+        app.comments.insert(
+            "src/main.rs".to_string(),
+            vec![
+                crate::app::ReviewComment {
+                    line_index: 0,
+                    text: "fix".to_string(),
+                },
+                crate::app::ReviewComment {
+                    line_index: 1,
+                    text: "also fix".to_string(),
+                },
+            ],
+        );
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "[2]"));
+    }
+
+    #[test]
+    fn render_hunk_header_line() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("src/main.rs", ChangeType::Modified)];
+        let mut app = App::new(files);
+        let diff = FileDiff {
+            hunks: vec![Hunk {
+                header: "@@ -1,3 +1,4 @@".to_string(),
+                lines: vec![
+                    DiffLine {
+                        line_type: LineType::HunkHeader,
+                        content: "@@ -1,3 +1,4 @@".to_string(),
+                        old_line_no: None,
+                        new_line_no: None,
+                    },
+                    DiffLine {
+                        line_type: LineType::Context,
+                        content: "context".to_string(),
+                        old_line_no: Some(1),
+                        new_line_no: Some(1),
+                    },
+                ],
+            }],
+        };
+        app.select_file_with_diff(0, Some(diff));
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "@@ -1,3 +1,4 @@"));
+    }
+
+    #[test]
+    fn render_inline_comments_on_diff_lines() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("src/main.rs", ChangeType::Modified)];
+        let mut app = App::new(files);
+        app.select_file_with_diff(0, Some(make_test_diff()));
+        app.comments.insert(
+            "src/main.rs".to_string(),
+            vec![crate::app::ReviewComment {
+                line_index: 0,
+                text: "review note here".to_string(),
+            }],
+        );
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "review note here"));
+        assert!(buffer_contains(&buffer, ">"));
+    }
+
+    #[test]
+    fn render_summary_mode_status_bar() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![]);
+        app.mode = Mode::Summary;
+        app.input_buffer = "my summary".to_string();
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "summary:"));
+        assert!(buffer_contains(&buffer, "my summary"));
+    }
+
+    #[test]
+    fn render_commenting_mode_status_bar() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = vec![make_test_file("src/main.rs", ChangeType::Modified)];
+        let mut app = App::new(files);
+        app.select_file_with_diff(0, Some(make_test_diff()));
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(0);
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "typing comment"));
+    }
+
+    #[test]
+    fn render_normal_mode_with_summary_done() {
+        let backend = TestBackend::new(160, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![]);
+        app.summary = "my review".to_string();
+
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        assert!(buffer_contains(&buffer, "summary: done"));
+    }
+
+    #[test]
     fn render_with_status_message_shows_in_status_bar() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();

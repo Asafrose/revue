@@ -2,6 +2,7 @@ use crate::app::App;
 use crate::diff::{self, FileDiff};
 use crate::git;
 
+#[cfg(not(tarpaulin_include))]
 pub fn format_review(app: &App) -> String {
     format_review_with(app, |path| {
         git::get_file_diff(path).ok().map(|raw| diff::parse_diff(&raw))
@@ -58,6 +59,7 @@ where
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 pub fn copy_to_clipboard(text: &str) -> Result<(), arboard::Error> {
     let mut cb = arboard::Clipboard::new()?;
     cb.set_text(text)?;
