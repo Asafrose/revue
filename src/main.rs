@@ -1,10 +1,12 @@
+mod git;
+
 use anyhow::Result;
 use ratatui::{DefaultTerminal, Frame};
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEventKind, EnableMouseCapture, DisableMouseCapture,
 };
 use ratatui::crossterm::execute;
-use std::io::{stdout, stderr};
+use std::io::stderr;
 use std::time::Duration;
 
 fn main() -> Result<()> {
