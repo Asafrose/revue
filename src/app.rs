@@ -21,6 +21,7 @@ pub struct App {
     pub diff_scroll: usize,
     pub commenting_line: Option<usize>,
     pub should_quit: bool,
+    pub status_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +49,7 @@ impl App {
             diff_scroll: 0,
             commenting_line: None,
             should_quit: false,
+            status_message: None,
         }
     }
 
