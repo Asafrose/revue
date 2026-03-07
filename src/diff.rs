@@ -169,4 +169,168 @@ index abc1234..def5678 100644
         let diff = parse_diff("");
         assert_eq!(diff.hunks.len(), 0);
     }
+
+    #[test]
+    fn test_multi_hunk_diff() {
+        let raw = r#"diff --git a/file.rs b/file.rs
+--- a/file.rs
++++ b/file.rs
+@@ -1,4 +1,4 @@
+ line1
+-line2
++LINE2
+ line3
+@@ -20,4 +20,4 @@
+ line20
+-line21
++LINE21
+ line22
+"#;
+        let diff = parse_diff(raw);
+        assert_eq!(diff.hunks.len(), 2);
+
+        // First hunk starts at old=1, new=1
+        let h0 = &diff.hunks[0];
+        assert_eq!(h0.lines[0].line_type, LineType::HunkHeader);
+        assert_eq!(h0.lines[1].old_line_no, Some(1));
+        assert_eq!(h0.lines[1].new_line_no, Some(1));
+        // Deletion at old_line 2
+        assert_eq!(h0.lines[2].line_type, LineType::Deletion);
+        assert_eq!(h0.lines[2].old_line_no, Some(2));
+        // Addition at new_line 2
+        assert_eq!(h0.lines[3].line_type, LineType::Addition);
+        assert_eq!(h0.lines[3].new_line_no, Some(2));
+
+        // Second hunk starts at old=20, new=20
+        let h1 = &diff.hunks[1];
+        assert_eq!(h1.lines[0].line_type, LineType::HunkHeader);
+        assert_eq!(h1.lines[1].old_line_no, Some(20));
+        assert_eq!(h1.lines[1].new_line_no, Some(20));
+        assert_eq!(h1.lines[2].line_type, LineType::Deletion);
+        assert_eq!(h1.lines[2].old_line_no, Some(21));
+        assert_eq!(h1.lines[3].line_type, LineType::Addition);
+        assert_eq!(h1.lines[3].new_line_no, Some(21));
+    }
+
+    #[test]
+    fn test_delete_only_diff() {
+        let raw = r#"diff --git a/file.rs b/file.rs
+--- a/file.rs
++++ b/file.rs
+@@ -1,4 +1,2 @@
+ keep
+-remove1
+-remove2
+ keep2
+"#;
+        let diff = parse_diff(raw);
+        assert_eq!(diff.hunks.len(), 1);
+        let hunk = &diff.hunks[0];
+        let deletions: Vec<_> = hunk
+            .lines
+            .iter()
+            .filter(|l| l.line_type == LineType::Deletion)
+            .collect();
+        assert_eq!(deletions.len(), 2);
+        let additions: Vec<_> = hunk
+            .lines
+            .iter()
+            .filter(|l| l.line_type == LineType::Addition)
+            .collect();
+        assert_eq!(additions.len(), 0);
+        for d in &deletions {
+            assert!(d.old_line_no.is_some());
+            assert!(d.new_line_no.is_none());
+        }
+    }
+
+    #[test]
+    fn test_add_only_diff() {
+        let raw = r#"diff --git a/file.rs b/file.rs
+--- a/file.rs
++++ b/file.rs
+@@ -1,2 +1,4 @@
+ keep
++added1
++added2
+ keep2
+"#;
+        let diff = parse_diff(raw);
+        assert_eq!(diff.hunks.len(), 1);
+        let hunk = &diff.hunks[0];
+        let additions: Vec<_> = hunk
+            .lines
+            .iter()
+            .filter(|l| l.line_type == LineType::Addition)
+            .collect();
+        assert_eq!(additions.len(), 2);
+        let deletions: Vec<_> = hunk
+            .lines
+            .iter()
+            .filter(|l| l.line_type == LineType::Deletion)
+            .collect();
+        assert_eq!(deletions.len(), 0);
+        for a in &additions {
+            assert!(a.old_line_no.is_none());
+            assert!(a.new_line_no.is_some());
+        }
+    }
+
+    #[test]
+    fn test_hunk_header_without_context() {
+        // No function name after @@
+        let result = parse_hunk_header("@@ -1,3 +1,3 @@");
+        assert_eq!(result, Some((1, 1)));
+    }
+
+    #[test]
+    fn test_hunk_header_single_line_no_comma() {
+        let result = parse_hunk_header("@@ -1 +1 @@");
+        assert_eq!(result, Some((1, 1)));
+    }
+
+    #[test]
+    fn test_parse_hunk_header_invalid_input() {
+        // Missing @@ prefix
+        assert_eq!(parse_hunk_header("-1,3 +1,3"), None);
+        // Missing +/- markers
+        assert_eq!(parse_hunk_header("@@ 1,3 1,3 @@"), None);
+        // Complete garbage
+        assert_eq!(parse_hunk_header("hello world"), None);
+        // Empty string
+        assert_eq!(parse_hunk_header(""), None);
+        // Only @@
+        assert_eq!(parse_hunk_header("@@"), None);
+        // @@ with space but no ranges
+        assert_eq!(parse_hunk_header("@@ @@"), None);
+    }
+
+    #[test]
+    fn test_no_newline_at_end_of_file_marker() {
+        let raw = r#"diff --git a/file.rs b/file.rs
+--- a/file.rs
++++ b/file.rs
+@@ -1,3 +1,3 @@
+ line1
+-old_last
++new_last
+\ No newline at end of file
+"#;
+        let diff = parse_diff(raw);
+        assert_eq!(diff.hunks.len(), 1);
+        let hunk = &diff.hunks[0];
+        // The "\ No newline..." line starts with '\' which falls through
+        // to the else branch and is not included as a diff line.
+        // We should have: HunkHeader, Context(line1), Deletion(old_last), Addition(new_last)
+        let types: Vec<_> = hunk.lines.iter().map(|l| &l.line_type).collect();
+        assert_eq!(
+            types,
+            vec![
+                &LineType::HunkHeader,
+                &LineType::Context,
+                &LineType::Deletion,
+                &LineType::Addition,
+            ]
+        );
+    }
 }
