@@ -1,7 +1,9 @@
 [package]
 name = "revue"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Mouse-heavy TUI code review sidecar for AI coding agents"
+license = "MIT"
 
 [dependencies]
 ratatui = "0.29"
