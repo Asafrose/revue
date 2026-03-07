@@ -121,14 +121,12 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         };
 
-        // Apply horizontal scroll to content
-        let content = &diff_line.content;
-        let visible_content = if app.diff_hscroll < content.len() {
-            &content[app.diff_hscroll..]
-        } else if content.is_empty() {
-            ""
+        // Replace tabs with spaces and apply horizontal scroll
+        let content = diff_line.content.replace('\t', "    ");
+        let visible_content: String = if app.diff_hscroll < content.len() {
+            content[app.diff_hscroll..].to_string()
         } else {
-            ""
+            String::new()
         };
 
         lines.push(Line::from(vec![
