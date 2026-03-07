@@ -48,7 +48,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     }
 }
 
-fn handle_event(app: &mut App, event: Event, frame_size: ratatui::layout::Rect) {
+pub(crate) fn handle_event(app: &mut App, event: Event, frame_size: ratatui::layout::Rect) {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => {
             app.status_message = None;
@@ -170,7 +170,7 @@ fn handle_event(app: &mut App, event: Event, frame_size: ratatui::layout::Rect) 
     }
 }
 
-fn map_row_to_diff_line(app: &App, target_row: usize) -> Option<usize> {
+pub(crate) fn map_row_to_diff_line(app: &App, target_row: usize) -> Option<usize> {
     let diff = app.current_diff.as_ref()?;
     let file_comments = app
         .current_file

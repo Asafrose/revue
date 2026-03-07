@@ -57,21 +57,24 @@ impl App {
         self.file_list_state.selected().and_then(|i| self.files.get(i))
     }
 
-    pub fn select_file(&mut self, index: usize) {
+    /// Select a file by index and set its diff data.
+    /// The caller is responsible for loading the diff.
+    pub fn select_file_with_diff(&mut self, index: usize, diff: Option<FileDiff>) {
         if index < self.files.len() {
             self.file_list_state.select(Some(index));
+            self.current_file = Some(self.files[index].path.clone());
+            self.current_diff = diff;
+            self.diff_scroll = 0;
+        }
+    }
+
+    pub fn select_file(&mut self, index: usize) {
+        if index < self.files.len() {
             let path = self.files[index].path.clone();
-            match crate::git::get_file_diff(&path) {
-                Ok(raw) => {
-                    self.current_diff = Some(crate::diff::parse_diff(&raw));
-                    self.current_file = Some(path);
-                    self.diff_scroll = 0;
-                }
-                Err(_) => {
-                    self.current_diff = None;
-                    self.current_file = None;
-                }
-            }
+            let diff = crate::git::get_file_diff(&path)
+                .ok()
+                .map(|raw| crate::diff::parse_diff(&raw));
+            self.select_file_with_diff(index, diff);
         }
     }
 

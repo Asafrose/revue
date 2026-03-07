@@ -213,7 +213,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn short_path(path: &str) -> &str {
+pub(crate) fn short_path(path: &str) -> &str {
     if path.len() > 20 {
         path.rsplit('/').next().unwrap_or(path)
     } else {

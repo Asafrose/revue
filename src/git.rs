@@ -17,21 +17,9 @@ pub enum ChangeType {
     Renamed,
 }
 
-pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
-    let output = Command::new("git")
-        .args(["diff", "--numstat", "--diff-filter=ADMR", "main"])
-        .output()
-        .context("Failed to run git diff")?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git diff failed: {}", err);
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
+pub(crate) fn parse_numstat(output: &str) -> Vec<ChangedFile> {
     let mut files = Vec::new();
-
-    for line in stdout.lines() {
+    for line in output.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() < 3 {
             continue;
@@ -42,20 +30,16 @@ pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
 
         files.push(ChangedFile {
             path,
-            change_type: ChangeType::Modified, // refined below
+            change_type: ChangeType::Modified, // refined by parse_name_status
             additions,
             deletions,
         });
     }
+    files
+}
 
-    // Get change types
-    let type_output = Command::new("git")
-        .args(["diff", "--name-status", "--diff-filter=ADMR", "main"])
-        .output()
-        .context("Failed to run git diff --name-status")?;
-
-    let type_stdout = String::from_utf8(type_output.stdout)?;
-    for line in type_stdout.lines() {
+pub(crate) fn parse_name_status(output: &str, files: &mut Vec<ChangedFile>) {
+    for line in output.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() < 2 {
             continue;
@@ -71,6 +55,30 @@ pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
             f.change_type = change_type;
         }
     }
+}
+
+pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
+    let output = Command::new("git")
+        .args(["diff", "--numstat", "--diff-filter=ADMR", "main"])
+        .output()
+        .context("Failed to run git diff")?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git diff failed: {}", err);
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let mut files = parse_numstat(&stdout);
+
+    // Get change types
+    let type_output = Command::new("git")
+        .args(["diff", "--name-status", "--diff-filter=ADMR", "main"])
+        .output()
+        .context("Failed to run git diff --name-status")?;
+
+    let type_stdout = String::from_utf8(type_output.stdout)?;
+    parse_name_status(&type_stdout, &mut files);
 
     Ok(files)
 }

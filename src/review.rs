@@ -1,8 +1,17 @@
 use crate::app::App;
-use crate::diff;
+use crate::diff::{self, FileDiff};
 use crate::git;
 
 pub fn format_review(app: &App) -> String {
+    format_review_with(app, |path| {
+        git::get_file_diff(path).ok().map(|raw| diff::parse_diff(&raw))
+    })
+}
+
+pub(crate) fn format_review_with<F>(app: &App, get_diff: F) -> String
+where
+    F: Fn(&str) -> Option<FileDiff>,
+{
     let mut out = String::from("Code Review Feedback:\n");
     let mut has_content = false;
 
@@ -12,9 +21,7 @@ pub fn format_review(app: &App) -> String {
                 continue;
             }
 
-            let diff = git::get_file_diff(&file.path)
-                .ok()
-                .map(|raw| diff::parse_diff(&raw));
+            let diff = get_diff(&file.path);
 
             for comment in comments {
                 has_content = true;
