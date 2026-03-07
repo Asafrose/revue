@@ -201,3 +201,485 @@ fn submit_review(app: &mut App) {
         app.status_message = Some("Review copied to clipboard!".to_string());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{App, Mode, ReviewComment};
+    use crate::diff::{DiffLine, FileDiff, Hunk, LineType};
+    use crate::git::{ChangeType, ChangedFile};
+    use ratatui::crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton,
+        MouseEvent, MouseEventKind,
+    };
+    use ratatui::layout::Rect;
+
+    fn key_event(code: KeyCode) -> Event {
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    fn mouse_click(col: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn mouse_scroll_up() -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn mouse_scroll_down() -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn frame_size() -> Rect {
+        Rect::new(0, 0, 80, 24)
+    }
+
+    fn make_test_app() -> App {
+        let files = vec![
+            ChangedFile {
+                path: "file1.rs".to_string(),
+                change_type: ChangeType::Modified,
+                additions: 5,
+                deletions: 3,
+            },
+            ChangedFile {
+                path: "file2.rs".to_string(),
+                change_type: ChangeType::Added,
+                additions: 10,
+                deletions: 0,
+            },
+        ];
+        let mut app = App::new(files);
+        let diff = FileDiff {
+            hunks: vec![Hunk {
+                header: "@@ -1,3 +1,4 @@".to_string(),
+                lines: vec![
+                    DiffLine {
+                        line_type: LineType::HunkHeader,
+                        content: "@@ -1,3 +1,4 @@".to_string(),
+                        old_line_no: None,
+                        new_line_no: None,
+                    },
+                    DiffLine {
+                        line_type: LineType::Context,
+                        content: "line 1".to_string(),
+                        old_line_no: Some(1),
+                        new_line_no: Some(1),
+                    },
+                    DiffLine {
+                        line_type: LineType::Deletion,
+                        content: "old".to_string(),
+                        old_line_no: Some(2),
+                        new_line_no: None,
+                    },
+                    DiffLine {
+                        line_type: LineType::Addition,
+                        content: "new".to_string(),
+                        old_line_no: None,
+                        new_line_no: Some(2),
+                    },
+                ],
+            }],
+        };
+        app.select_file_with_diff(0, Some(diff));
+        app
+    }
+
+    // ── Normal mode: 'q' sets should_quit ────────────────────────────
+
+    #[test]
+    fn normal_q_sets_should_quit() {
+        let mut app = make_test_app();
+        handle_event(&mut app, key_event(KeyCode::Char('q')), frame_size());
+        assert!(app.should_quit);
+    }
+
+    // ── Normal mode: 's' switches to Summary mode ────────────────────
+
+    #[test]
+    fn normal_s_switches_to_summary_mode() {
+        let mut app = make_test_app();
+        app.summary = "existing summary".to_string();
+        handle_event(&mut app, key_event(KeyCode::Char('s')), frame_size());
+        assert_eq!(app.mode, Mode::Summary);
+        assert_eq!(app.input_buffer, "existing summary");
+    }
+
+    // ── Normal mode: j/Down increases diff_scroll ────────────────────
+
+    #[test]
+    fn normal_j_increases_diff_scroll() {
+        let mut app = make_test_app();
+        assert_eq!(app.diff_scroll, 0);
+        handle_event(&mut app, key_event(KeyCode::Char('j')), frame_size());
+        assert_eq!(app.diff_scroll, 1);
+    }
+
+    #[test]
+    fn normal_down_increases_diff_scroll() {
+        let mut app = make_test_app();
+        handle_event(&mut app, key_event(KeyCode::Down), frame_size());
+        assert_eq!(app.diff_scroll, 1);
+    }
+
+    // ── Normal mode: k/Up decreases diff_scroll (saturating) ─────────
+
+    #[test]
+    fn normal_k_decreases_diff_scroll() {
+        let mut app = make_test_app();
+        app.diff_scroll = 5;
+        handle_event(&mut app, key_event(KeyCode::Char('k')), frame_size());
+        assert_eq!(app.diff_scroll, 4);
+    }
+
+    #[test]
+    fn normal_up_decreases_diff_scroll() {
+        let mut app = make_test_app();
+        app.diff_scroll = 3;
+        handle_event(&mut app, key_event(KeyCode::Up), frame_size());
+        assert_eq!(app.diff_scroll, 2);
+    }
+
+    #[test]
+    fn normal_k_saturates_at_zero() {
+        let mut app = make_test_app();
+        app.diff_scroll = 0;
+        handle_event(&mut app, key_event(KeyCode::Char('k')), frame_size());
+        assert_eq!(app.diff_scroll, 0);
+    }
+
+    // ── Normal mode: Tab selects next file (wrapping) ────────────────
+
+    #[test]
+    fn normal_tab_selects_next_file() {
+        let mut app = make_test_app();
+        assert_eq!(app.file_list_state.selected(), Some(0));
+        handle_event(&mut app, key_event(KeyCode::Tab), frame_size());
+        assert_eq!(app.file_list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn normal_tab_wraps_to_first() {
+        let mut app = make_test_app();
+        // Select second file (index 1)
+        app.select_file_with_diff(1, None);
+        assert_eq!(app.file_list_state.selected(), Some(1));
+        handle_event(&mut app, key_event(KeyCode::Tab), frame_size());
+        assert_eq!(app.file_list_state.selected(), Some(0));
+    }
+
+    // ── Normal mode: BackTab selects previous file (wrapping) ────────
+
+    #[test]
+    fn normal_backtab_selects_previous_file() {
+        let mut app = make_test_app();
+        app.select_file_with_diff(1, None);
+        handle_event(&mut app, key_event(KeyCode::BackTab), frame_size());
+        assert_eq!(app.file_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn normal_backtab_wraps_to_last() {
+        let mut app = make_test_app();
+        assert_eq!(app.file_list_state.selected(), Some(0));
+        handle_event(&mut app, key_event(KeyCode::BackTab), frame_size());
+        assert_eq!(app.file_list_state.selected(), Some(1));
+    }
+
+    // ── Normal mode: any key clears status_message ───────────────────
+
+    #[test]
+    fn normal_any_key_clears_status_message() {
+        let mut app = make_test_app();
+        app.status_message = Some("some status".to_string());
+        handle_event(&mut app, key_event(KeyCode::Char('j')), frame_size());
+        assert!(app.status_message.is_none());
+    }
+
+    // ── Normal mode: unknown key does nothing ────────────────────────
+
+    #[test]
+    fn normal_unknown_key_does_nothing() {
+        let mut app = make_test_app();
+        let scroll_before = app.diff_scroll;
+        let mode_before = app.mode.clone();
+        handle_event(&mut app, key_event(KeyCode::Char('z')), frame_size());
+        assert_eq!(app.diff_scroll, scroll_before);
+        assert_eq!(app.mode, mode_before);
+        assert!(!app.should_quit);
+    }
+
+    // ── Commenting mode: Char appends to input_buffer ────────────────
+
+    #[test]
+    fn commenting_char_appends_to_buffer() {
+        let mut app = make_test_app();
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(0);
+        app.input_buffer = "hel".to_string();
+        handle_event(&mut app, key_event(KeyCode::Char('l')), frame_size());
+        assert_eq!(app.input_buffer, "hell");
+    }
+
+    // ── Commenting mode: Backspace removes last char ─────────────────
+
+    #[test]
+    fn commenting_backspace_removes_last_char() {
+        let mut app = make_test_app();
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(0);
+        app.input_buffer = "hello".to_string();
+        handle_event(&mut app, key_event(KeyCode::Backspace), frame_size());
+        assert_eq!(app.input_buffer, "hell");
+    }
+
+    // ── Commenting mode: Esc cancels ─────────────────────────────────
+
+    #[test]
+    fn commenting_esc_cancels() {
+        let mut app = make_test_app();
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(2);
+        app.input_buffer = "some partial comment".to_string();
+        handle_event(&mut app, key_event(KeyCode::Esc), frame_size());
+        assert!(app.input_buffer.is_empty());
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.commenting_line.is_none());
+    }
+
+    // ── Commenting mode: Enter submits comment ───────────────────────
+
+    #[test]
+    fn commenting_enter_submits_comment() {
+        let mut app = make_test_app();
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(1);
+        app.input_buffer = "nice line".to_string();
+        handle_event(&mut app, key_event(KeyCode::Enter), frame_size());
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.input_buffer.is_empty());
+        assert!(app.commenting_line.is_none());
+        let comments = app.comments.get("file1.rs").unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].line_index, 1);
+        assert_eq!(comments[0].text, "nice line");
+    }
+
+    // ── Summary mode: Char appends to input_buffer ───────────────────
+
+    #[test]
+    fn summary_char_appends_to_buffer() {
+        let mut app = make_test_app();
+        app.mode = Mode::Summary;
+        app.input_buffer = "sum".to_string();
+        handle_event(&mut app, key_event(KeyCode::Char('m')), frame_size());
+        assert_eq!(app.input_buffer, "summ");
+    }
+
+    // ── Summary mode: Enter saves summary ────────────────────────────
+
+    #[test]
+    fn summary_enter_saves_summary() {
+        let mut app = make_test_app();
+        app.mode = Mode::Summary;
+        app.input_buffer = "my review summary".to_string();
+        handle_event(&mut app, key_event(KeyCode::Enter), frame_size());
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.summary, "my review summary");
+        assert!(app.input_buffer.is_empty());
+    }
+
+    // ── Summary mode: Esc cancels ────────────────────────────────────
+
+    #[test]
+    fn summary_esc_cancels() {
+        let mut app = make_test_app();
+        app.summary = "old summary".to_string();
+        app.mode = Mode::Summary;
+        app.input_buffer = "new draft".to_string();
+        handle_event(&mut app, key_event(KeyCode::Esc), frame_size());
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.input_buffer.is_empty());
+        // Original summary should be unchanged
+        assert_eq!(app.summary, "old summary");
+    }
+
+    // ── Mouse: click in file list selects file ───────────────────────
+
+    #[test]
+    fn mouse_click_file_list_selects_file() {
+        let mut app = make_test_app();
+        let file_area = ui::file_list_area(frame_size());
+        // Click on the second file (row = file_area.y + 1 for border + 1 for second item)
+        let click_col = file_area.x + 1;
+        let click_row = file_area.y + 2; // border row + first item row -> second item
+        handle_event(&mut app, mouse_click(click_col, click_row), frame_size());
+        assert_eq!(app.file_list_state.selected(), Some(1));
+    }
+
+    // ── Mouse: click in diff area starts commenting ──────────────────
+
+    #[test]
+    fn mouse_click_diff_area_starts_commenting() {
+        let mut app = make_test_app();
+        let diff_inner = ui::diff_area(frame_size());
+        // Click on the first visible row of the diff
+        let click_col = diff_inner.x + 1;
+        let click_row = diff_inner.y;
+        handle_event(&mut app, mouse_click(click_col, click_row), frame_size());
+        assert_eq!(app.mode, Mode::Commenting);
+        assert!(app.commenting_line.is_some());
+        assert!(app.input_buffer.is_empty());
+    }
+
+    // ── Mouse: events ignored when not in Normal mode ────────────────
+
+    #[test]
+    fn mouse_events_ignored_in_commenting_mode() {
+        let mut app = make_test_app();
+        app.mode = Mode::Commenting;
+        app.commenting_line = Some(0);
+        let diff_inner = ui::diff_area(frame_size());
+        let click_col = diff_inner.x + 1;
+        let click_row = diff_inner.y;
+        handle_event(&mut app, mouse_click(click_col, click_row), frame_size());
+        // Mode should still be Commenting, not changed
+        assert_eq!(app.mode, Mode::Commenting);
+    }
+
+    #[test]
+    fn mouse_events_ignored_in_summary_mode() {
+        let mut app = make_test_app();
+        app.mode = Mode::Summary;
+        let scroll_before = app.diff_scroll;
+        handle_event(&mut app, mouse_scroll_down(), frame_size());
+        assert_eq!(app.diff_scroll, scroll_before);
+        assert_eq!(app.mode, Mode::Summary);
+    }
+
+    // ── Mouse: scroll up decreases diff_scroll by 3 ──────────────────
+
+    #[test]
+    fn mouse_scroll_up_decreases_diff_scroll() {
+        let mut app = make_test_app();
+        app.diff_scroll = 10;
+        handle_event(&mut app, mouse_scroll_up(), frame_size());
+        assert_eq!(app.diff_scroll, 7);
+    }
+
+    #[test]
+    fn mouse_scroll_up_saturates_at_zero() {
+        let mut app = make_test_app();
+        app.diff_scroll = 1;
+        handle_event(&mut app, mouse_scroll_up(), frame_size());
+        assert_eq!(app.diff_scroll, 0);
+    }
+
+    // ── Mouse: scroll down increases diff_scroll by 3 ────────────────
+
+    #[test]
+    fn mouse_scroll_down_increases_diff_scroll() {
+        let mut app = make_test_app();
+        app.diff_scroll = 0;
+        handle_event(&mut app, mouse_scroll_down(), frame_size());
+        assert_eq!(app.diff_scroll, 3);
+    }
+
+    // ── map_row_to_diff_line: no diff returns None ───────────────────
+
+    #[test]
+    fn map_row_no_diff_returns_none() {
+        let mut app = make_test_app();
+        app.current_diff = None;
+        assert_eq!(map_row_to_diff_line(&app, 0), None);
+    }
+
+    // ── map_row_to_diff_line: row 0 returns Some(0) ──────────────────
+
+    #[test]
+    fn map_row_zero_returns_first_line() {
+        let app = make_test_app();
+        assert_eq!(map_row_to_diff_line(&app, 0), Some(0));
+    }
+
+    // ── map_row_to_diff_line: row beyond diff lines returns None ──────
+
+    #[test]
+    fn map_row_beyond_diff_returns_none() {
+        let app = make_test_app();
+        // The diff has 4 lines (indices 0..3), so row 4 is beyond
+        assert_eq!(map_row_to_diff_line(&app, 4), None);
+        assert_eq!(map_row_to_diff_line(&app, 100), None);
+    }
+
+    // ── map_row_to_diff_line: with comments, rows are offset ─────────
+
+    #[test]
+    fn map_row_with_comments_offset() {
+        let mut app = make_test_app();
+        // Add a comment on diff line 0
+        app.comments.insert(
+            "file1.rs".to_string(),
+            vec![ReviewComment {
+                line_index: 0,
+                text: "a comment".to_string(),
+            }],
+        );
+        // Row 0 -> diff line 0
+        assert_eq!(map_row_to_diff_line(&app, 0), Some(0));
+        // Row 1 is the comment row, so row 2 -> diff line 1
+        assert_eq!(map_row_to_diff_line(&app, 2), Some(1));
+        // Row 3 -> diff line 2
+        assert_eq!(map_row_to_diff_line(&app, 3), Some(2));
+        // Row 4 -> diff line 3
+        assert_eq!(map_row_to_diff_line(&app, 4), Some(3));
+        // Row 5 is beyond (4 diff lines + 1 comment = 5 visual rows total)
+        assert_eq!(map_row_to_diff_line(&app, 5), None);
+    }
+
+    #[test]
+    fn map_row_with_multiple_comments_on_same_line() {
+        let mut app = make_test_app();
+        // Two comments on diff line 1
+        app.comments.insert(
+            "file1.rs".to_string(),
+            vec![
+                ReviewComment {
+                    line_index: 1,
+                    text: "first comment".to_string(),
+                },
+                ReviewComment {
+                    line_index: 1,
+                    text: "second comment".to_string(),
+                },
+            ],
+        );
+        // Row 0 -> diff line 0
+        assert_eq!(map_row_to_diff_line(&app, 0), Some(0));
+        // Row 1 -> diff line 1
+        assert_eq!(map_row_to_diff_line(&app, 1), Some(1));
+        // Rows 2, 3 are comments for line 1
+        // Row 4 -> diff line 2
+        assert_eq!(map_row_to_diff_line(&app, 4), Some(2));
+    }
+}
