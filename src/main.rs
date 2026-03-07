@@ -164,6 +164,12 @@ pub(crate) fn handle_event(app: &mut App, event: Event, frame_size: ratatui::lay
                 MouseEventKind::ScrollDown => {
                     app.diff_scroll += 3;
                 }
+                MouseEventKind::ScrollLeft => {
+                    app.diff_hscroll = app.diff_hscroll.saturating_sub(4);
+                }
+                MouseEventKind::ScrollRight => {
+                    app.diff_hscroll += 4;
+                }
                 _ => {}
             }
         }
