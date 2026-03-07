@@ -7,6 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
+/// Width of the file list sidebar
+const FILE_LIST_WIDTH: u16 = 22;
+
 pub fn render(frame: &mut Frame, app: &mut App) {
     let [main_area, status_area] = Layout::vertical([
         Constraint::Fill(1),
@@ -16,7 +19,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let [diff_area, file_list_area] = Layout::horizontal([
         Constraint::Fill(1),
-        Constraint::Length(30),
+        Constraint::Length(FILE_LIST_WIDTH),
     ])
     .areas(main_area);
 
@@ -50,10 +53,6 @@ fn render_file_list(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(indicator.1).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(short_path(&f.path)),
-                Span::styled(
-                    format!(" +{}-{}", f.additions, f.deletions),
-                    Style::default().fg(Color::DarkGray),
-                ),
                 Span::styled(comment_badge, Style::default().fg(Color::Magenta)),
             ]);
 
@@ -115,21 +114,26 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
         };
 
         let line_no = match diff_line.line_type {
-            LineType::HunkHeader => "    ".to_string(),
+            LineType::HunkHeader => "   ".to_string(),
             _ => {
-                let old = diff_line
-                    .old_line_no
-                    .map_or("  ".to_string(), |n| format!("{:>3}", n));
-                let new = diff_line
-                    .new_line_no
-                    .map_or("  ".to_string(), |n| format!("{:>3}", n));
-                format!("{} {}", old, new)
+                let n = diff_line.new_line_no.or(diff_line.old_line_no);
+                n.map_or("   ".to_string(), |n| format!("{:>3}", n))
             }
+        };
+
+        // Apply horizontal scroll to content
+        let content = &diff_line.content;
+        let visible_content = if app.diff_hscroll < content.len() {
+            &content[app.diff_hscroll..]
+        } else if content.is_empty() {
+            ""
+        } else {
+            ""
         };
 
         lines.push(Line::from(vec![
             Span::styled(format!("{} ", line_no), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}{}", prefix, &diff_line.content), style),
+            Span::styled(format!("{}{}", prefix, visible_content), style),
         ]));
 
         // Render inline comments for this line
@@ -188,7 +192,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 let total_comments: usize = app.comments.values().map(|c| c.len()).sum();
                 let summary_indicator = if app.summary.is_empty() { "" } else { " | summary: done" };
                 format!(
-                    " click: select | Tab/Shift-Tab: files | j/k: scroll | s: summary | S: submit | r: refresh | q: quit | comments: {}{}",
+                    " Tab: files | j/k: scroll | h/l: pan | s: summary | S: submit | q: quit | {}{}",
                     total_comments, summary_indicator
                 )
             }
@@ -213,12 +217,23 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+/// Shorten a path to fit the sidebar. Shows last dir + filename when possible.
 pub(crate) fn short_path(path: &str) -> &str {
-    if path.len() > 20 {
-        path.rsplit('/').next().unwrap_or(path)
-    } else {
-        path
+    if path.len() <= 18 {
+        return path;
     }
+    // Try to show "dir/file.ext"
+    let mut parts = path.rsplitn(3, '/');
+    let file = parts.next().unwrap_or(path);
+    if let Some(dir) = parts.next() {
+        // Find where "dir/file" starts in the original path
+        let suffix_len = dir.len() + 1 + file.len();
+        if suffix_len <= 18 {
+            return &path[path.len() - suffix_len..];
+        }
+    }
+    // Fall back to just filename
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 /// Returns the area occupied by the file list panel.
@@ -231,7 +246,7 @@ pub fn file_list_area(frame_area: Rect) -> Rect {
 
     let [_diff, file_list] = Layout::horizontal([
         Constraint::Fill(1),
-        Constraint::Length(30),
+        Constraint::Length(FILE_LIST_WIDTH),
     ])
     .areas(main_area);
 
@@ -248,7 +263,7 @@ pub fn diff_area(frame_area: Rect) -> Rect {
 
     let [diff, _file_list] = Layout::horizontal([
         Constraint::Fill(1),
-        Constraint::Length(30),
+        Constraint::Length(FILE_LIST_WIDTH),
     ])
     .areas(main_area);
 
@@ -326,33 +341,33 @@ mod tests {
     }
 
     #[test]
-    fn short_path_long_returns_filename() {
+    fn short_path_long_returns_dir_and_filename() {
         assert_eq!(
             short_path("some/very/deeply/nested/directory/structure/file.rs"),
-            "file.rs"
+            "structure/file.rs"
         );
     }
 
     #[test]
     fn short_path_long_no_slash_returns_whole() {
+        // No slash means rsplit('/').next() returns the whole string
         let path = "a_really_long_filename_without_slashes.rs";
         assert_eq!(short_path(path), path);
     }
 
     #[test]
-    fn short_path_exactly_20_chars_unchanged() {
-        // exactly 20 characters
-        let path = "12345678901234567890";
-        assert_eq!(path.len(), 20);
+    fn short_path_exactly_18_chars_unchanged() {
+        let path = "123456789012345678";
+        assert_eq!(path.len(), 18);
         assert_eq!(short_path(path), path);
     }
 
     #[test]
-    fn short_path_21_chars_with_slash_returns_filename() {
-        // 21 characters with a slash
-        let path = "abcdefghij/1234567890";
-        assert_eq!(path.len(), 21);
-        assert_eq!(short_path(path), "1234567890");
+    fn short_path_19_chars_with_slash_returns_dir_file() {
+        // 19 characters with slashes — shows dir/file
+        let path = "abc/defgh/123456789";
+        assert_eq!(path.len(), 19);
+        assert_eq!(short_path(path), "defgh/123456789");
     }
 
     // ── file_list_area tests ─────────────────────────────────────────
@@ -361,14 +376,14 @@ mod tests {
     fn file_list_area_standard_frame() {
         let frame = Rect::new(0, 0, 80, 24);
         let area = file_list_area(frame);
-        assert_eq!(area.width, 30);
+        assert_eq!(area.width, FILE_LIST_WIDTH);
     }
 
     #[test]
-    fn file_list_area_x_is_frame_width_minus_30() {
+    fn file_list_area_x_is_frame_width_minus_sidebar() {
         let frame = Rect::new(0, 0, 80, 24);
         let area = file_list_area(frame);
-        assert_eq!(area.x, 80 - 30);
+        assert_eq!(area.x, 80 - FILE_LIST_WIDTH);
     }
 
     #[test]
@@ -393,8 +408,7 @@ mod tests {
     fn diff_area_width_is_frame_minus_sidebar_minus_borders() {
         let frame = Rect::new(0, 0, 80, 24);
         let area = diff_area(frame);
-        // diff panel width = 80 - 30 = 50, inner = 50 - 2 = 48
-        assert_eq!(area.width, 80 - 30 - 2);
+        assert_eq!(area.width, 80 - FILE_LIST_WIDTH - 2);
     }
 
     #[test]

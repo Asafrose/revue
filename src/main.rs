@@ -68,6 +68,12 @@ pub(crate) fn handle_event(app: &mut App, event: Event, frame_size: ratatui::lay
                 KeyCode::Down | KeyCode::Char('j') => {
                     app.diff_scroll += 1;
                 }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    app.diff_hscroll = app.diff_hscroll.saturating_sub(4);
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    app.diff_hscroll += 4;
+                }
                 KeyCode::Tab => {
                     let next = app.file_list_state.selected().map_or(0, |i| {
                         if i + 1 < app.files.len() { i + 1 } else { 0 }

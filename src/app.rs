@@ -19,6 +19,7 @@ pub struct App {
     pub mode: Mode,
     pub input_buffer: String,
     pub diff_scroll: usize,
+    pub diff_hscroll: usize,
     pub commenting_line: Option<usize>,
     pub should_quit: bool,
     pub status_message: Option<String>,
@@ -47,6 +48,7 @@ impl App {
             mode: Mode::Normal,
             input_buffer: String::new(),
             diff_scroll: 0,
+            diff_hscroll: 0,
             commenting_line: None,
             should_quit: false,
             status_message: None,
@@ -65,6 +67,7 @@ impl App {
             self.current_file = Some(self.files[index].path.clone());
             self.current_diff = diff;
             self.diff_scroll = 0;
+            self.diff_hscroll = 0;
         }
     }
 
