@@ -17,6 +17,8 @@ use std::time::Duration;
 
 #[cfg(not(tarpaulin_include))]
 fn main() -> Result<()> {
+    use std::panic::{self, AssertUnwindSafe};
+
     let files = git::get_changed_files()?;
 
     execute!(stderr(), EnableMouseCapture)?;
@@ -27,10 +29,22 @@ fn main() -> Result<()> {
         app.select_file(0);
     }
 
-    let result = run(&mut terminal, &mut app);
+    let result = panic::catch_unwind(AssertUnwindSafe(|| run(&mut terminal, &mut app)));
+
     ratatui::restore();
     execute!(stderr(), DisableMouseCapture)?;
-    result
+
+    match result {
+        Ok(inner) => inner,
+        Err(panic_payload) => {
+            let msg = panic_payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| panic_payload.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            anyhow::bail!("panic: {}", msg);
+        }
+    }
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -55,134 +69,157 @@ pub(crate) fn handle_event(app: &mut App, event: Event, frame_size: ratatui::lay
         Event::Key(key) if key.kind == KeyEventKind::Press => {
             app.status_message = None;
             match app.mode {
-            Mode::Normal => match key.code {
-                KeyCode::Char('q') => app.should_quit = true,
-                KeyCode::Char('s') => {
-                    app.mode = Mode::Summary;
-                    app.input_buffer = app.summary.clone();
-                }
-                KeyCode::Char('S') => submit_review(app),
-                KeyCode::Up | KeyCode::Char('k') => {
-                    app.diff_scroll = app.diff_scroll.saturating_sub(1);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    app.diff_scroll += 1;
-                }
-                KeyCode::Char('h') | KeyCode::Left => {
-                    app.diff_hscroll = app.diff_hscroll.saturating_sub(4);
-                }
-                KeyCode::Char('l') | KeyCode::Right => {
-                    app.diff_hscroll += 4;
-                }
-                KeyCode::Tab => {
-                    let next = app.file_list_state.selected().map_or(0, |i| {
-                        if i + 1 < app.files.len() { i + 1 } else { 0 }
-                    });
-                    app.select_file(next);
-                }
-                KeyCode::BackTab => {
-                    let prev = app.file_list_state.selected().map_or(0, |i| {
-                        if i == 0 { app.files.len().saturating_sub(1) } else { i - 1 }
-                    });
-                    app.select_file(prev);
-                }
-                KeyCode::Char('r') => {
-                    if let Ok(files) = git::get_changed_files() {
-                        refresh_file_list(app, files);
-                    }
-                }
-                _ => {}
-            },
-            Mode::Commenting => match key.code {
-                KeyCode::Enter => app.submit_comment(),
-                KeyCode::Esc => {
-                    app.input_buffer.clear();
-                    app.commenting_line = None;
-                    app.mode = Mode::Normal;
-                }
-                KeyCode::Char(c) => app.input_buffer.push(c),
-                KeyCode::Backspace => {
-                    app.input_buffer.pop();
-                }
-                _ => {}
-            },
-            Mode::Summary => match key.code {
-                KeyCode::Enter => app.submit_summary(),
-                KeyCode::Esc => {
-                    app.input_buffer.clear();
-                    app.mode = Mode::Normal;
-                }
-                KeyCode::Char(c) => app.input_buffer.push(c),
-                KeyCode::Backspace => {
-                    app.input_buffer.pop();
-                }
-                _ => {}
-            },
-        }
-        }
-        Event::Mouse(mouse) => {
-            if app.mode != Mode::Normal {
-                return;
+                Mode::Normal => handle_normal_key(app, key.code),
+                Mode::Commenting => handle_commenting_key(app, key.code),
+                Mode::Summary => handle_summary_key(app, key.code),
             }
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    let col = mouse.column;
-                    let row = mouse.row;
+        }
+        Event::Mouse(mouse) if app.mode == Mode::Normal => {
+            handle_mouse(app, mouse, frame_size);
+        }
+        _ => {}
+    }
+}
 
-                    // Check if click is in file list
-                    let file_area = ui::file_list_area(frame_size);
-                    if col >= file_area.x
-                        && col < file_area.x + file_area.width
-                        && row >= file_area.y + 1
-                        && row < file_area.y + file_area.height - 1
-                    {
-                        let index = (row - file_area.y - 1) as usize;
-                        if index < app.files.len() {
-                            app.select_file(index);
-                        }
-                        return;
-                    }
-
-                    // Check if click is in diff area
-                    let diff_inner = ui::diff_area(frame_size);
-                    if col >= diff_inner.x
-                        && col < diff_inner.x + diff_inner.width
-                        && row >= diff_inner.y
-                        && row < diff_inner.y + diff_inner.height
-                    {
-                        let clicked_row = (row - diff_inner.y) as usize + app.diff_scroll;
-                        if let Some(line_idx) = map_row_to_diff_line(app, clicked_row) {
-                            app.commenting_line = Some(line_idx);
-                            app.mode = Mode::Commenting;
-                            app.input_buffer.clear();
-                        }
-                    }
+fn handle_normal_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('s') => {
+            app.mode = Mode::Summary;
+            app.input_buffer = app.summary.clone();
+        }
+        KeyCode::Char('S') => submit_review(app),
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.diff_scroll = app.diff_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.diff_scroll += 1;
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            app.diff_hscroll = app.diff_hscroll.saturating_sub(4);
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            app.diff_hscroll += 4;
+        }
+        KeyCode::Tab => {
+            let next = app.file_list_state.selected().map_or(0, |i| {
+                if i + 1 < app.files.len() {
+                    i + 1
+                } else {
+                    0
                 }
-                MouseEventKind::ScrollUp => {
-                    app.diff_scroll = app.diff_scroll.saturating_sub(3);
+            });
+            app.select_file(next);
+        }
+        KeyCode::BackTab => {
+            let prev = app.file_list_state.selected().map_or(0, |i| {
+                if i == 0 {
+                    app.files.len().saturating_sub(1)
+                } else {
+                    i - 1
                 }
-                MouseEventKind::ScrollDown => {
-                    app.diff_scroll += 3;
-                }
-                MouseEventKind::ScrollLeft => {
-                    app.diff_hscroll = app.diff_hscroll.saturating_sub(4);
-                }
-                MouseEventKind::ScrollRight => {
-                    app.diff_hscroll += 4;
-                }
-                _ => {}
+            });
+            app.select_file(prev);
+        }
+        KeyCode::Char('r') => {
+            if let Ok(files) = git::get_changed_files() {
+                refresh_file_list(app, files);
             }
         }
         _ => {}
     }
 }
 
+fn handle_commenting_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Enter => app.submit_comment(),
+        KeyCode::Esc => {
+            app.input_buffer.clear();
+            app.commenting_line = None;
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Char(c) => app.input_buffer.push(c),
+        KeyCode::Backspace => {
+            app.input_buffer.pop();
+        }
+        _ => {}
+    }
+}
+
+fn handle_summary_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Enter => app.submit_summary(),
+        KeyCode::Esc => {
+            app.input_buffer.clear();
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Char(c) => app.input_buffer.push(c),
+        KeyCode::Backspace => {
+            app.input_buffer.pop();
+        }
+        _ => {}
+    }
+}
+
+fn handle_mouse(
+    app: &mut App,
+    mouse: ratatui::crossterm::event::MouseEvent,
+    frame_size: ratatui::layout::Rect,
+) {
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            handle_mouse_click(app, mouse.column, mouse.row, frame_size);
+        }
+        MouseEventKind::ScrollUp => {
+            app.diff_scroll = app.diff_scroll.saturating_sub(3);
+        }
+        MouseEventKind::ScrollDown => {
+            app.diff_scroll += 3;
+        }
+        MouseEventKind::ScrollLeft => {
+            app.diff_hscroll = app.diff_hscroll.saturating_sub(4);
+        }
+        MouseEventKind::ScrollRight => {
+            app.diff_hscroll += 4;
+        }
+        _ => {}
+    }
+}
+
+fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::layout::Rect) {
+    // Check if click is in file list
+    let file_area = ui::file_list_area(frame_size);
+    if col >= file_area.x
+        && col < file_area.x + file_area.width
+        && row > file_area.y
+        && row < file_area.y + file_area.height - 1
+    {
+        let index = (row - file_area.y - 1) as usize;
+        if index < app.files.len() {
+            app.select_file(index);
+        }
+        return;
+    }
+
+    // Check if click is in diff area
+    let diff_inner = ui::diff_area(frame_size);
+    if col >= diff_inner.x
+        && col < diff_inner.x + diff_inner.width
+        && row >= diff_inner.y
+        && row < diff_inner.y + diff_inner.height
+    {
+        let clicked_row = (row - diff_inner.y) as usize + app.diff_scroll;
+        if let Some(line_idx) = map_row_to_diff_line(app, clicked_row) {
+            app.commenting_line = Some(line_idx);
+            app.mode = Mode::Commenting;
+            app.input_buffer.clear();
+        }
+    }
+}
+
 pub(crate) fn map_row_to_diff_line(app: &App, target_row: usize) -> Option<usize> {
     let diff = app.current_diff.as_ref()?;
-    let file_comments = app
-        .current_file
-        .as_ref()
-        .and_then(|f| app.comments.get(f));
+    let file_comments = app.current_file.as_ref().and_then(|f| app.comments.get(f));
 
     let all_lines: Vec<_> = diff.hunks.iter().flat_map(|h| h.lines.iter()).collect();
     let mut visual_row = 0;

@@ -39,7 +39,7 @@ pub(crate) fn parse_numstat(output: &str) -> Vec<ChangedFile> {
     files
 }
 
-pub(crate) fn parse_name_status(output: &str, files: &mut Vec<ChangedFile>) {
+pub(crate) fn parse_name_status(output: &str, files: &mut [ChangedFile]) {
     for line in output.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() < 2 {

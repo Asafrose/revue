@@ -84,10 +84,7 @@ impl App {
                     line_index: line_idx,
                     text: self.input_buffer.clone(),
                 };
-                self.comments
-                    .entry(file.clone())
-                    .or_default()
-                    .push(comment);
+                self.comments.entry(file.clone()).or_default().push(comment);
             }
         }
         self.input_buffer.clear();
@@ -346,8 +343,14 @@ mod tests {
         app.comments.insert(
             "a.rs".to_string(),
             vec![
-                ReviewComment { line_index: 1, text: "fix this".to_string() },
-                ReviewComment { line_index: 5, text: "and this".to_string() },
+                ReviewComment {
+                    line_index: 1,
+                    text: "fix this".to_string(),
+                },
+                ReviewComment {
+                    line_index: 5,
+                    text: "and this".to_string(),
+                },
             ],
         );
         assert_eq!(app.file_comment_count("a.rs"), 2);
@@ -362,14 +365,26 @@ mod tests {
         ]);
         app.comments.insert(
             "a.rs".to_string(),
-            vec![ReviewComment { line_index: 1, text: "one".to_string() }],
+            vec![ReviewComment {
+                line_index: 1,
+                text: "one".to_string(),
+            }],
         );
         app.comments.insert(
             "b.rs".to_string(),
             vec![
-                ReviewComment { line_index: 1, text: "two".to_string() },
-                ReviewComment { line_index: 2, text: "three".to_string() },
-                ReviewComment { line_index: 3, text: "four".to_string() },
+                ReviewComment {
+                    line_index: 1,
+                    text: "two".to_string(),
+                },
+                ReviewComment {
+                    line_index: 2,
+                    text: "three".to_string(),
+                },
+                ReviewComment {
+                    line_index: 3,
+                    text: "four".to_string(),
+                },
             ],
         );
         assert_eq!(app.file_comment_count("a.rs"), 1);

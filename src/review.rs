@@ -5,7 +5,9 @@ use crate::git;
 #[cfg(not(tarpaulin_include))]
 pub fn format_review(app: &App) -> String {
     format_review_with(app, |path| {
-        git::get_file_diff(path).ok().map(|raw| diff::parse_diff(&raw))
+        git::get_file_diff(path)
+            .ok()
+            .map(|raw| diff::parse_diff(&raw))
     })
 }
 
@@ -125,7 +127,10 @@ mod tests {
         let mut app = App::new(vec![make_file("src/main.rs")]);
         app.summary = "Looks good overall".to_string();
         let result = format_review_with(&app, |_path| Some(make_diff()));
-        assert_eq!(result, "Code Review Feedback:\n\nSummary: Looks good overall\n");
+        assert_eq!(
+            result,
+            "Code Review Feedback:\n\nSummary: Looks good overall\n"
+        );
     }
 
     // ── 3. One file, one comment, diff available ─────────────────────
@@ -210,10 +215,7 @@ mod tests {
 
     #[test]
     fn multiple_files_with_comments() {
-        let mut app = App::new(vec![
-            make_file("src/main.rs"),
-            make_file("src/lib.rs"),
-        ]);
+        let mut app = App::new(vec![make_file("src/main.rs"), make_file("src/lib.rs")]);
         app.comments.insert(
             "src/main.rs".to_string(),
             vec![ReviewComment {
@@ -284,8 +286,7 @@ mod tests {
     #[test]
     fn file_with_empty_comments_vec_is_skipped() {
         let mut app = App::new(vec![make_file("src/main.rs")]);
-        app.comments
-            .insert("src/main.rs".to_string(), vec![]);
+        app.comments.insert("src/main.rs".to_string(), vec![]);
         let result = format_review_with(&app, |_path| Some(make_diff()));
         assert_eq!(result, "");
     }

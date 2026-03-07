@@ -49,20 +49,24 @@ pub fn parse_diff(raw: &str) -> FileDiff {
                 old_line_no: None,
                 new_line_no: None,
             });
-        } else if line.starts_with("---") || line.starts_with("+++") || line.starts_with("diff ") || line.starts_with("index ") {
+        } else if line.starts_with("---")
+            || line.starts_with("+++")
+            || line.starts_with("diff ")
+            || line.starts_with("index ")
+        {
             continue;
-        } else if line.starts_with('+') {
+        } else if let Some(stripped) = line.strip_prefix('+') {
             current_lines.push(DiffLine {
                 line_type: LineType::Addition,
-                content: line[1..].to_string(),
+                content: stripped.to_string(),
                 old_line_no: None,
                 new_line_no: Some(new_line),
             });
             new_line += 1;
-        } else if line.starts_with('-') {
+        } else if let Some(stripped) = line.strip_prefix('-') {
             current_lines.push(DiffLine {
                 line_type: LineType::Deletion,
-                content: line[1..].to_string(),
+                content: stripped.to_string(),
                 old_line_no: Some(old_line),
                 new_line_no: None,
             });

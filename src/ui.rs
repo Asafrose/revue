@@ -11,17 +11,12 @@ use ratatui::Frame;
 const FILE_LIST_WIDTH: u16 = 22;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let [main_area, status_area] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(3),
-    ])
-    .areas(frame.area());
+    let [main_area, status_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame.area());
 
-    let [diff_area, file_list_area] = Layout::horizontal([
-        Constraint::Fill(1),
-        Constraint::Length(FILE_LIST_WIDTH),
-    ])
-    .areas(main_area);
+    let [diff_area, file_list_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(FILE_LIST_WIDTH)])
+            .areas(main_area);
 
     render_file_list(frame, app, file_list_area);
     render_diff(frame, app, diff_area);
@@ -50,7 +45,9 @@ fn render_file_list(frame: &mut Frame, app: &mut App, area: Rect) {
             let line = Line::from(vec![
                 Span::styled(
                     format!("{} ", indicator.0),
-                    Style::default().fg(indicator.1).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(indicator.1)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(short_path(&f.path)),
                 Span::styled(comment_badge, Style::default().fg(Color::Magenta)),
@@ -95,10 +92,7 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let mut lines: Vec<Line> = Vec::new();
-    let file_comments = app
-        .current_file
-        .as_ref()
-        .and_then(|f| app.comments.get(f));
+    let file_comments = app.current_file.as_ref().and_then(|f| app.comments.get(f));
 
     let all_diff_lines: Vec<_> = diff.hunks.iter().flat_map(|h| h.lines.iter()).collect();
 
@@ -108,7 +102,9 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
             LineType::Deletion => (Style::default().fg(Color::Red), "-"),
             LineType::Context => (Style::default().fg(Color::White), " "),
             LineType::HunkHeader => (
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
                 "",
             ),
         };
@@ -123,14 +119,13 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Replace tabs with spaces and apply horizontal scroll
         let content = diff_line.content.replace('\t', "    ");
-        let visible_content: String = if app.diff_hscroll < content.len() {
-            content[app.diff_hscroll..].to_string()
-        } else {
-            String::new()
-        };
+        let visible_content: String = content.chars().skip(app.diff_hscroll).collect();
 
         lines.push(Line::from(vec![
-            Span::styled(format!("{} ", line_no), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ", line_no),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled(format!("{}{}", prefix, visible_content), style),
         ]));
 
@@ -138,10 +133,7 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
         if let Some(comments) = file_comments {
             for comment in comments.iter().filter(|c| c.line_index == idx) {
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        "       > ",
-                        Style::default().fg(Color::Magenta),
-                    ),
+                    Span::styled("       > ", Style::default().fg(Color::Magenta)),
                     Span::styled(
                         comment.text.clone(),
                         Style::default()
@@ -155,23 +147,22 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
         // Show input line if commenting on this line
         if app.mode == Mode::Commenting && app.commenting_line == Some(idx) {
             lines.push(Line::from(vec![
-                Span::styled(
-                    "       > ",
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(
-                    app.input_buffer.clone(),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled("       > ", Style::default().fg(Color::Yellow)),
+                Span::styled(app.input_buffer.clone(), Style::default().fg(Color::Yellow)),
                 Span::styled("_", Style::default().fg(Color::Yellow)),
             ]));
         }
     }
 
-    // Apply scroll
+    // Apply scroll (clamp and write back so future scroll-up works immediately)
     let visible_height = inner.height as usize;
-    let scroll = app.diff_scroll.min(lines.len().saturating_sub(visible_height));
-    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).take(visible_height).collect();
+    let max_scroll = lines.len().saturating_sub(visible_height);
+    app.diff_scroll = app.diff_scroll.min(max_scroll);
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(app.diff_scroll)
+        .take(visible_height)
+        .collect();
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
@@ -188,7 +179,11 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 msg.clone()
             } else {
                 let total_comments: usize = app.comments.values().map(|c| c.len()).sum();
-                let summary_indicator = if app.summary.is_empty() { "" } else { " | summary: done" };
+                let summary_indicator = if app.summary.is_empty() {
+                    ""
+                } else {
+                    " | summary: done"
+                };
                 format!(
                     " Tab: files | j/k: scroll | h/l: pan | s: summary | S: submit | q: quit | {}{}",
                     total_comments, summary_indicator
@@ -236,34 +231,24 @@ pub(crate) fn short_path(path: &str) -> &str {
 
 /// Returns the area occupied by the file list panel.
 pub fn file_list_area(frame_area: Rect) -> Rect {
-    let [main_area, _status] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(3),
-    ])
-    .areas(frame_area);
+    let [main_area, _status] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame_area);
 
-    let [_diff, file_list] = Layout::horizontal([
-        Constraint::Fill(1),
-        Constraint::Length(FILE_LIST_WIDTH),
-    ])
-    .areas(main_area);
+    let [_diff, file_list] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(FILE_LIST_WIDTH)])
+            .areas(main_area);
 
     file_list
 }
 
 /// Returns the inner area of the diff panel (inside borders).
 pub fn diff_area(frame_area: Rect) -> Rect {
-    let [main_area, _status] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(3),
-    ])
-    .areas(frame_area);
+    let [main_area, _status] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame_area);
 
-    let [diff, _file_list] = Layout::horizontal([
-        Constraint::Fill(1),
-        Constraint::Length(FILE_LIST_WIDTH),
-    ])
-    .areas(main_area);
+    let [diff, _file_list] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(FILE_LIST_WIDTH)])
+            .areas(main_area);
 
     Rect {
         x: diff.x + 1,
