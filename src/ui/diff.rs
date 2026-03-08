@@ -218,8 +218,16 @@ impl StatefulWidget for DiffWidget {
             // Show input card if commenting on this line
             if state.mode == Mode::Commenting && state.commenting_line == Some(idx) {
                 let text = state.input_text();
+                let cursor_visible =
+                    state.cursor_blink_start.elapsed().as_millis() % 1000 < 500;
+                let (crow, ccol) = state
+                    .textarea
+                    .as_ref()
+                    .map(|ta| ta.cursor())
+                    .unwrap_or((0, 0));
                 let card = CommentCard::new(&text, Color::Yellow, card_width)
-                    .hint("Enter: save │ Esc: cancel");
+                    .hint("⏎ save │ Alt+⏎ newline │ Esc cancel")
+                    .cursor(crow, ccol, cursor_visible);
                 lines.extend(card.to_lines());
             }
         }

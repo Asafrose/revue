@@ -2,6 +2,7 @@ use crate::diff::FileDiff;
 use crate::git::ChangedFile;
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
+use std::time::Instant;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use tui_textarea::{CursorMove, TextArea};
@@ -28,6 +29,7 @@ pub struct App {
     pub status_message: Option<String>,
     pub syntax_set: SyntaxSet,
     pub theme_set: ThemeSet,
+    pub cursor_blink_start: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +61,7 @@ impl App {
             status_message: None,
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
+            cursor_blink_start: Instant::now(),
         }
     }
 
@@ -90,6 +93,8 @@ impl App {
             .map(|ta| ta.lines().join("\n"))
             .unwrap_or_default()
     }
+
+
 
     pub fn start_input(&mut self, initial_text: &str) {
         let lines = if initial_text.is_empty() {
