@@ -8,7 +8,7 @@ use anyhow::Result;
 use app::{App, Mode};
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    MouseButton, MouseEventKind,
+    KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::DefaultTerminal;
@@ -132,9 +132,15 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
 }
 
 fn handle_commenting_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Enter => app.submit_comment(),
-        KeyCode::Esc => {
+    app.cursor_blink_start = std::time::Instant::now();
+    match (key.code, key.modifiers) {
+        (KeyCode::Enter, m) if m.contains(KeyModifiers::ALT) => {
+            if let Some(textarea) = &mut app.textarea {
+                textarea.insert_newline();
+            }
+        }
+        (KeyCode::Enter, _) => app.submit_comment(),
+        (KeyCode::Esc, _) => {
             app.clear_input();
             app.commenting_line = None;
             app.mode = Mode::Normal;
@@ -148,9 +154,15 @@ fn handle_commenting_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_summary_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Enter => app.submit_summary(),
-        KeyCode::Esc => {
+    app.cursor_blink_start = std::time::Instant::now();
+    match (key.code, key.modifiers) {
+        (KeyCode::Enter, m) if m.contains(KeyModifiers::ALT) => {
+            if let Some(textarea) = &mut app.textarea {
+                textarea.insert_newline();
+            }
+        }
+        (KeyCode::Enter, _) => app.submit_summary(),
+        (KeyCode::Esc, _) => {
             app.clear_input();
             app.mode = Mode::Normal;
         }
@@ -218,6 +230,17 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
     }
 }
 
+/// Calculate the number of visual lines a comment card occupies.
+/// Matches CommentCard::to_lines(): 1 top border + content lines + 1 bottom border.
+fn comment_card_height(text: &str) -> usize {
+    let content_lines = if text.is_empty() {
+        1
+    } else {
+        text.lines().count()
+    };
+    2 + content_lines
+}
+
 pub(crate) fn map_row_to_diff_line(app: &App, target_row: usize) -> Option<usize> {
     let diff = app.current_diff.as_ref()?;
     let file_comments = app.current_file.as_ref().and_then(|f| app.comments.get(f));
@@ -231,7 +254,9 @@ pub(crate) fn map_row_to_diff_line(app: &App, target_row: usize) -> Option<usize
         }
         visual_row += 1;
         if let Some(comments) = file_comments {
-            visual_row += comments.iter().filter(|c| c.line_index == idx).count();
+            for c in comments.iter().filter(|c| c.line_index == idx) {
+                visual_row += comment_card_height(&c.text);
+            }
         }
     }
     None
@@ -275,6 +300,15 @@ mod tests {
         Event::Key(KeyEvent {
             code,
             modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    fn ctrl_key_event(code: KeyCode) -> Event {
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::CONTROL,
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         })
@@ -704,14 +738,15 @@ mod tests {
         );
         // Row 0 -> diff line 0
         assert_eq!(map_row_to_diff_line(&app, 0), Some(0));
-        // Row 1 is the comment row, so row 2 -> diff line 1
-        assert_eq!(map_row_to_diff_line(&app, 2), Some(1));
-        // Row 3 -> diff line 2
-        assert_eq!(map_row_to_diff_line(&app, 3), Some(2));
-        // Row 4 -> diff line 3
-        assert_eq!(map_row_to_diff_line(&app, 4), Some(3));
-        // Row 5 is beyond (4 diff lines + 1 comment = 5 visual rows total)
-        assert_eq!(map_row_to_diff_line(&app, 5), None);
+        // Comment card takes 3 rows (border + content + border), so rows 1-3 are card
+        // Row 4 -> diff line 1
+        assert_eq!(map_row_to_diff_line(&app, 4), Some(1));
+        // Row 5 -> diff line 2
+        assert_eq!(map_row_to_diff_line(&app, 5), Some(2));
+        // Row 6 -> diff line 3
+        assert_eq!(map_row_to_diff_line(&app, 6), Some(3));
+        // Row 7 is beyond (4 diff lines + 3 card rows = 7 visual rows total)
+        assert_eq!(map_row_to_diff_line(&app, 7), None);
     }
 
     // ── Normal mode: 'S' calls submit_review (excluded from coverage) ──
@@ -860,8 +895,8 @@ mod tests {
         assert_eq!(map_row_to_diff_line(&app, 0), Some(0));
         // Row 1 -> diff line 1
         assert_eq!(map_row_to_diff_line(&app, 1), Some(1));
-        // Rows 2, 3 are comments for line 1
-        // Row 4 -> diff line 2
-        assert_eq!(map_row_to_diff_line(&app, 4), Some(2));
+        // Two cards at 3 rows each = 6 visual rows for comments (rows 2-7)
+        // Row 8 -> diff line 2
+        assert_eq!(map_row_to_diff_line(&app, 8), Some(2));
     }
 }
