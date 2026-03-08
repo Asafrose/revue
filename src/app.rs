@@ -94,8 +94,6 @@ impl App {
             .unwrap_or_default()
     }
 
-
-
     pub fn start_input(&mut self, initial_text: &str) {
         let lines = if initial_text.is_empty() {
             vec!["".to_string()]

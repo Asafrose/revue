@@ -94,15 +94,16 @@ impl<'a> CommentCard<'a> {
                 };
 
                 let content_style = style.add_modifier(Modifier::ITALIC);
-                let cursor_style = Style::default()
-                    .fg(Color::Black)
-                    .bg(self.color);
+                let cursor_style = Style::default().fg(Color::Black).bg(self.color);
 
                 lines.push(Line::from(vec![
                     Span::styled(format!("{}│ ", self.indent), style),
                     Span::styled(before, content_style),
                     Span::styled(cursor_ch, cursor_style),
-                    Span::styled(format!("{}{}", after, " ".repeat(after_padding)), content_style),
+                    Span::styled(
+                        format!("{}{}", after, " ".repeat(after_padding)),
+                        content_style,
+                    ),
                     Span::styled(" │", style),
                 ]));
             } else {

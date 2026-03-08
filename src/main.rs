@@ -233,7 +233,11 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
 /// Calculate the number of visual lines a comment card occupies.
 /// Matches CommentCard::to_lines(): 1 top border + content lines + 1 bottom border.
 fn comment_card_height(text: &str) -> usize {
-    let content_lines = if text.is_empty() { 1 } else { text.lines().count() };
+    let content_lines = if text.is_empty() {
+        1
+    } else {
+        text.lines().count()
+    };
     2 + content_lines
 }
 
