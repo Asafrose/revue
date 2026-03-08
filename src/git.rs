@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::process::Command;
+use git2::{Delta, Diff, DiffOptions, Patch, Repository};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -18,20 +18,62 @@ pub enum ChangeType {
     Renamed,
 }
 
-pub(crate) fn parse_numstat(output: &str) -> Vec<ChangedFile> {
+fn open_repo() -> Result<Repository> {
+    Repository::discover(".").context("Not a git repository")
+}
+
+fn main_tree(repo: &Repository) -> Result<git2::Tree<'_>> {
+    let branch = repo
+        .find_branch("main", git2::BranchType::Local)
+        .context("Could not find 'main' branch")?;
+    let commit = branch.get().peel_to_commit()?;
+    Ok(commit.tree()?)
+}
+
+fn diff_against_main(repo: &Repository, context_lines: u32) -> Result<Diff<'_>> {
+    let tree = main_tree(repo)?;
+    let mut opts = DiffOptions::new();
+    opts.include_untracked(true);
+    opts.show_untracked_content(true);
+    opts.recurse_untracked_dirs(true);
+    opts.context_lines(context_lines);
+    repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+        .context("Failed to compute diff against main")
+}
+
+pub(crate) fn delta_to_change_type(delta: Delta) -> Option<ChangeType> {
+    match delta {
+        Delta::Added | Delta::Untracked => Some(ChangeType::Added),
+        Delta::Deleted => Some(ChangeType::Deleted),
+        Delta::Modified => Some(ChangeType::Modified),
+        Delta::Renamed => Some(ChangeType::Renamed),
+        _ => None,
+    }
+}
+
+pub(crate) fn changed_files_from_diff(diff: &Diff<'_>) -> Vec<ChangedFile> {
     let mut files = Vec::new();
-    for line in output.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 3 {
+    for (i, delta) in diff.deltas().enumerate() {
+        let Some(change_type) = delta_to_change_type(delta.status()) else {
             continue;
-        }
-        let additions = parts[0].parse().unwrap_or(0);
-        let deletions = parts[1].parse().unwrap_or(0);
-        let path = parts[2].to_string();
+        };
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let (additions, deletions) = Patch::from_diff(diff, i)
+            .ok()
+            .flatten()
+            .and_then(|p| p.line_stats().ok())
+            .map(|(_ctx, add, del)| (add, del))
+            .unwrap_or((0, 0));
 
         files.push(ChangedFile {
             path,
-            change_type: ChangeType::Modified, // refined by parse_name_status
+            change_type,
             additions,
             deletions,
         });
@@ -39,212 +81,300 @@ pub(crate) fn parse_numstat(output: &str) -> Vec<ChangedFile> {
     files
 }
 
-pub(crate) fn parse_name_status(output: &str, files: &mut [ChangedFile]) {
-    for line in output.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 2 {
-            continue;
+pub(crate) fn format_diff_patch(diff: &Diff<'_>) -> Result<String> {
+    let mut output = String::new();
+    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        let origin = line.origin();
+        // Only prepend origin for actual diff lines (+, -, space)
+        // File headers (F/>) and hunk headers (H) are emitted as-is
+        match origin {
+            '+' | '-' | ' ' => output.push(origin),
+            _ => {}
         }
-        let change_type = match parts[0].chars().next() {
-            Some('A') => ChangeType::Added,
-            Some('D') => ChangeType::Deleted,
-            Some('R') => ChangeType::Renamed,
-            _ => ChangeType::Modified,
-        };
-        let path = parts.last().unwrap().to_string();
-        if let Some(f) = files.iter_mut().find(|f| f.path == path) {
-            f.change_type = change_type;
+        if let Ok(content) = std::str::from_utf8(line.content()) {
+            output.push_str(content);
         }
-    }
+        true
+    })?;
+    Ok(output)
 }
 
 #[cfg(not(tarpaulin_include))]
 pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
-    let output = Command::new("git")
-        .args(["diff", "--numstat", "--diff-filter=ADMR", "main"])
-        .output()
-        .context("Failed to run git diff")?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git diff failed: {}", err);
-    }
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let mut files = parse_numstat(&stdout);
-
-    // Get change types
-    let type_output = Command::new("git")
-        .args(["diff", "--name-status", "--diff-filter=ADMR", "main"])
-        .output()
-        .context("Failed to run git diff --name-status")?;
-
-    let type_stdout = String::from_utf8(type_output.stdout)?;
-    parse_name_status(&type_stdout, &mut files);
-
-    Ok(files)
+    let repo = open_repo()?;
+    let diff = diff_against_main(&repo, 3)?;
+    Ok(changed_files_from_diff(&diff))
 }
 
 #[cfg(not(tarpaulin_include))]
 pub fn get_file_diff(path: &str) -> Result<String> {
-    // Count lines in the working-tree copy so we can request full-file context.
-    // git diff has no "unlimited context" flag, so we pass the file's line count.
+    let repo = open_repo()?;
+    let tree = main_tree(&repo)?;
+
+    // Use full-file context: read line count from working copy
     let line_count = std::fs::read_to_string(path)
         .map(|s| s.lines().count())
-        .unwrap_or(0);
-    let context_flag = format!("-U{}", line_count);
+        .unwrap_or(0) as u32;
 
-    let output = Command::new("git")
-        .args(["diff", &context_flag, "main", "--", path])
-        .output()
-        .context("Failed to run git diff for file")?;
+    let mut opts = DiffOptions::new();
+    opts.pathspec(path);
+    opts.include_untracked(true);
+    opts.show_untracked_content(true);
+    opts.recurse_untracked_dirs(true);
+    opts.context_lines(line_count);
 
-    Ok(String::from_utf8(output.stdout)?)
+    let diff = repo
+        .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+        .context("Failed to compute file diff")?;
+
+    format_diff_patch(&diff)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::Path;
 
-    // ── parse_numstat tests ──────────────────────────────────────────
+    /// Create a temp repo with an initial commit on "main" branch.
+    fn setup_repo() -> (tempfile::TempDir, Repository) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        // Configure a dummy author for commits
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+
+        // Create initial commit on main
+        let file_path = dir.path().join("initial.txt");
+        fs::write(&file_path, "hello\n").unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("initial.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let sig = repo.signature().unwrap();
+        let commit_oid = {
+            let tree = repo.find_tree(tree_oid).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+                .unwrap()
+        };
+
+        // Create "main" branch pointing to this commit
+        {
+            let commit = repo.find_commit(commit_oid).unwrap();
+            repo.branch("main", &commit, false).unwrap();
+        }
+
+        (dir, repo)
+    }
+
+    // ── delta_to_change_type ─────────────────────────────────────────
 
     #[test]
-    fn parse_numstat_empty_input() {
-        let files = parse_numstat("");
+    fn delta_to_change_type_added() {
+        assert_eq!(delta_to_change_type(Delta::Added), Some(ChangeType::Added));
+    }
+
+    #[test]
+    fn delta_to_change_type_untracked() {
+        assert_eq!(
+            delta_to_change_type(Delta::Untracked),
+            Some(ChangeType::Added)
+        );
+    }
+
+    #[test]
+    fn delta_to_change_type_deleted() {
+        assert_eq!(
+            delta_to_change_type(Delta::Deleted),
+            Some(ChangeType::Deleted)
+        );
+    }
+
+    #[test]
+    fn delta_to_change_type_modified() {
+        assert_eq!(
+            delta_to_change_type(Delta::Modified),
+            Some(ChangeType::Modified)
+        );
+    }
+
+    #[test]
+    fn delta_to_change_type_renamed() {
+        assert_eq!(
+            delta_to_change_type(Delta::Renamed),
+            Some(ChangeType::Renamed)
+        );
+    }
+
+    #[test]
+    fn delta_to_change_type_ignored_returns_none() {
+        assert_eq!(delta_to_change_type(Delta::Ignored), None);
+    }
+
+    #[test]
+    fn delta_to_change_type_unmodified_returns_none() {
+        assert_eq!(delta_to_change_type(Delta::Unmodified), None);
+    }
+
+    // ── changed_files_from_diff ──────────────────────────────────────
+
+    #[test]
+    fn changed_files_detects_modified_file() {
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("initial.txt"), "hello\nworld\n").unwrap();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let files = changed_files_from_diff(&diff);
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "initial.txt");
+        assert_eq!(files[0].change_type, ChangeType::Modified);
+        assert_eq!(files[0].additions, 1); // added "world"
+    }
+
+    #[test]
+    fn changed_files_detects_untracked_file() {
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("new_file.txt"), "brand new\n").unwrap();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let files = changed_files_from_diff(&diff);
+
+        let new = files.iter().find(|f| f.path == "new_file.txt").unwrap();
+        assert_eq!(new.change_type, ChangeType::Added);
+        assert_eq!(new.additions, 1);
+    }
+
+    #[test]
+    fn changed_files_detects_deleted_file() {
+        let (dir, repo) = setup_repo();
+        fs::remove_file(dir.path().join("initial.txt")).unwrap();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let files = changed_files_from_diff(&diff);
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "initial.txt");
+        assert_eq!(files[0].change_type, ChangeType::Deleted);
+        assert_eq!(files[0].deletions, 1);
+    }
+
+    #[test]
+    fn changed_files_no_changes_returns_empty() {
+        let (_dir, repo) = setup_repo();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let files = changed_files_from_diff(&diff);
+
         assert!(files.is_empty());
     }
 
     #[test]
-    fn parse_numstat_single_file() {
-        let input = "10\t5\tpath/to/file.rs";
-        let files = parse_numstat(input);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].path, "path/to/file.rs");
-        assert_eq!(files[0].additions, 10);
-        assert_eq!(files[0].deletions, 5);
-    }
+    fn changed_files_multiple_changes() {
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("initial.txt"), "changed\n").unwrap();
+        fs::write(dir.path().join("added.txt"), "new content\n").unwrap();
 
-    #[test]
-    fn parse_numstat_multiple_files() {
-        let input = "10\t5\tsrc/main.rs\n3\t1\tsrc/lib.rs\n20\t0\tREADME.md";
-        let files = parse_numstat(input);
-        assert_eq!(files.len(), 3);
-        assert_eq!(files[0].path, "src/main.rs");
-        assert_eq!(files[1].path, "src/lib.rs");
-        assert_eq!(files[1].additions, 3);
-        assert_eq!(files[1].deletions, 1);
-        assert_eq!(files[2].path, "README.md");
-        assert_eq!(files[2].additions, 20);
-        assert_eq!(files[2].deletions, 0);
-    }
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let files = changed_files_from_diff(&diff);
 
-    #[test]
-    fn parse_numstat_binary_file() {
-        let input = "-\t-\timage.png";
-        let files = parse_numstat(input);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].path, "image.png");
-        assert_eq!(files[0].additions, 0);
-        assert_eq!(files[0].deletions, 0);
-    }
-
-    #[test]
-    fn parse_numstat_malformed_line_skipped() {
-        let input = "10\t5\tgood.rs\nmalformed_line\n8\t2\talso_good.rs";
-        let files = parse_numstat(input);
         assert_eq!(files.len(), 2);
-        assert_eq!(files[0].path, "good.rs");
-        assert_eq!(files[1].path, "also_good.rs");
-    }
-
-    // ── parse_name_status tests ──────────────────────────────────────
-
-    #[test]
-    fn parse_name_status_added_file() {
-        let mut files = vec![ChangedFile {
-            path: "new_file.rs".to_string(),
-            change_type: ChangeType::Modified,
-            additions: 10,
-            deletions: 0,
-        }];
-        parse_name_status("A\tnew_file.rs", &mut files);
-        assert_eq!(files[0].change_type, ChangeType::Added);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"initial.txt"));
+        assert!(paths.contains(&"added.txt"));
     }
 
     #[test]
-    fn parse_name_status_modified_file() {
-        let mut files = vec![ChangedFile {
-            path: "existing.rs".to_string(),
-            change_type: ChangeType::Modified,
-            additions: 5,
-            deletions: 3,
-        }];
-        parse_name_status("M\texisting.rs", &mut files);
-        assert_eq!(files[0].change_type, ChangeType::Modified);
+    fn changed_files_untracked_in_subdirectory() {
+        let (dir, repo) = setup_repo();
+        let subdir = dir.path().join("src");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("lib.rs"), "fn main() {}\n").unwrap();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let files = changed_files_from_diff(&diff);
+
+        let new = files.iter().find(|f| f.path == "src/lib.rs").unwrap();
+        assert_eq!(new.change_type, ChangeType::Added);
+    }
+
+    // ── format_diff_patch ────────────────────────────────────────────
+
+    #[test]
+    fn format_diff_patch_modified_file() {
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("initial.txt"), "hello\nworld\n").unwrap();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let patch = format_diff_patch(&diff).unwrap();
+
+        assert!(patch.contains("+world"));
+        assert!(patch.contains("@@ "));
     }
 
     #[test]
-    fn parse_name_status_deleted_file() {
-        let mut files = vec![ChangedFile {
-            path: "old.rs".to_string(),
-            change_type: ChangeType::Modified,
-            additions: 0,
-            deletions: 50,
-        }];
-        parse_name_status("D\told.rs", &mut files);
-        assert_eq!(files[0].change_type, ChangeType::Deleted);
+    fn format_diff_patch_untracked_file() {
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("brand_new.txt"), "line1\nline2\n").unwrap();
+
+        let mut opts = DiffOptions::new();
+        opts.pathspec("brand_new.txt");
+        opts.include_untracked(true);
+        opts.show_untracked_content(true);
+
+        let tree = main_tree(&repo).unwrap();
+        let diff = repo
+            .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+            .unwrap();
+        let patch = format_diff_patch(&diff).unwrap();
+
+        assert!(patch.contains("+line1"));
+        assert!(patch.contains("+line2"));
     }
 
     #[test]
-    fn parse_name_status_renamed_file() {
-        let mut files = vec![ChangedFile {
-            path: "new_name.rs".to_string(),
-            change_type: ChangeType::Modified,
-            additions: 2,
-            deletions: 1,
-        }];
-        parse_name_status("R100\told_name.rs\tnew_name.rs", &mut files);
-        assert_eq!(files[0].change_type, ChangeType::Renamed);
+    fn format_diff_patch_deleted_file() {
+        let (dir, repo) = setup_repo();
+        fs::remove_file(dir.path().join("initial.txt")).unwrap();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let patch = format_diff_patch(&diff).unwrap();
+
+        assert!(patch.contains("-hello"));
     }
 
     #[test]
-    fn parse_name_status_missing_file_ignored() {
-        let mut files = vec![ChangedFile {
-            path: "exists.rs".to_string(),
-            change_type: ChangeType::Modified,
-            additions: 1,
-            deletions: 1,
-        }];
-        parse_name_status("A\tnot_in_vec.rs", &mut files);
-        // The existing file should remain unchanged
-        assert_eq!(files[0].change_type, ChangeType::Modified);
-        assert_eq!(files.len(), 1);
+    fn format_diff_patch_empty_diff() {
+        let (_dir, repo) = setup_repo();
+
+        let diff = diff_against_main(&repo, 3).unwrap();
+        let patch = format_diff_patch(&diff).unwrap();
+
+        assert!(patch.is_empty());
     }
 
     #[test]
-    fn parse_name_status_malformed_line_skipped() {
-        let mut files = vec![ChangedFile {
-            path: "file.rs".to_string(),
-            change_type: ChangeType::Modified,
-            additions: 1,
-            deletions: 0,
-        }];
-        // Line with no tab separator should be skipped (hits the continue on line 45)
-        parse_name_status("A\tfile.rs\nmalformed_no_tab\nD\tfile.rs", &mut files);
-        // The last status wins: Deleted
-        assert_eq!(files[0].change_type, ChangeType::Deleted);
-    }
+    fn format_diff_patch_context_lines() {
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("initial.txt"), "hello\nnew line\n").unwrap();
 
-    #[test]
-    fn parse_name_status_empty_input() {
-        let mut files = vec![ChangedFile {
-            path: "file.rs".to_string(),
-            change_type: ChangeType::Modified,
-            additions: 1,
-            deletions: 0,
-        }];
-        parse_name_status("", &mut files);
-        // No changes should have been made
-        assert_eq!(files[0].change_type, ChangeType::Modified);
+        // Request full context
+        let tree = main_tree(&repo).unwrap();
+        let mut opts = DiffOptions::new();
+        opts.pathspec("initial.txt");
+        opts.include_untracked(true);
+        opts.context_lines(100);
+
+        let diff = repo
+            .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+            .unwrap();
+        let patch = format_diff_patch(&diff).unwrap();
+
+        // Context line for unchanged "hello" and addition of "new line"
+        assert!(patch.contains(" hello"));
+        assert!(patch.contains("+new line"));
     }
 }

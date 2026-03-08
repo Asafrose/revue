@@ -1,11 +1,7 @@
-use std::process::Command;
+use git2::Repository;
 
 #[test]
-#[ignore] // requires local main branch; skipped in CI
-fn test_git_diff_stat_parses() {
-    let output = Command::new("git")
-        .args(["diff", "--stat", "main...HEAD"])
-        .output()
-        .expect("git command failed");
-    assert!(output.status.success());
+fn repo_discovers_from_cwd() {
+    let repo = Repository::discover(".");
+    assert!(repo.is_ok(), "Should find a git repository from cwd");
 }
