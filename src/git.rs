@@ -87,8 +87,15 @@ pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
 
 #[cfg(not(tarpaulin_include))]
 pub fn get_file_diff(path: &str) -> Result<String> {
+    // Count lines in the working-tree copy so we can request full-file context.
+    // git diff has no "unlimited context" flag, so we pass the file's line count.
+    let line_count = std::fs::read_to_string(path)
+        .map(|s| s.lines().count())
+        .unwrap_or(0);
+    let context_flag = format!("-U{}", line_count);
+
     let output = Command::new("git")
-        .args(["diff", "main", "--", path])
+        .args(["diff", &context_flag, "main", "--", path])
         .output()
         .context("Failed to run git diff for file")?;
 

@@ -1,4 +1,5 @@
 use crate::app::{App, Mode};
+use crate::diff::DiffLine;
 use crate::diff::LineType;
 use crate::git::ChangeType;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -146,17 +147,19 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Show input line if commenting on this line
         if app.mode == Mode::Commenting && app.commenting_line == Some(idx) {
+            let text = app.input_text();
             lines.push(Line::from(vec![
                 Span::styled("       > ", Style::default().fg(Color::Yellow)),
-                Span::styled(app.input_buffer.clone(), Style::default().fg(Color::Yellow)),
+                Span::styled(text, Style::default().fg(Color::Yellow)),
                 Span::styled("_", Style::default().fg(Color::Yellow)),
             ]));
         }
     }
 
     // Apply scroll (clamp and write back so future scroll-up works immediately)
+    let total_lines = lines.len();
     let visible_height = inner.height as usize;
-    let max_scroll = lines.len().saturating_sub(visible_height);
+    let max_scroll = total_lines.saturating_sub(visible_height);
     app.diff_scroll = app.diff_scroll.min(max_scroll);
     let visible_lines: Vec<Line> = lines
         .into_iter()
@@ -166,6 +169,94 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
+
+    // Render change map (scrollbar with colored change indicators)
+    if total_lines > 0 {
+        render_change_map(
+            frame,
+            &all_diff_lines,
+            total_lines,
+            visible_height,
+            app.diff_scroll,
+            inner,
+        );
+    }
+}
+
+/// Renders a 1-column change map on the right edge of the diff area.
+/// Each row maps proportionally to the full file; additions are green,
+/// deletions are red, and the current viewport is shown as a bright thumb.
+fn render_change_map(
+    frame: &mut Frame,
+    diff_lines: &[&DiffLine],
+    total_rendered: usize,
+    visible_height: usize,
+    scroll: usize,
+    inner: Rect,
+) {
+    let height = inner.height as usize;
+    if height == 0 || diff_lines.is_empty() {
+        return;
+    }
+
+    let col = inner.x + inner.width.saturating_sub(1);
+    let buf = frame.buffer_mut();
+
+    // Thumb range (viewport indicator)
+    let thumb_start = if total_rendered <= visible_height {
+        0
+    } else {
+        scroll * height / total_rendered
+    };
+    let thumb_len = if total_rendered <= visible_height {
+        height
+    } else {
+        (visible_height * height / total_rendered).max(1)
+    };
+    let thumb_end = (thumb_start + thumb_len).min(height);
+
+    for row in 0..height {
+        // Map this gutter row to a range of diff lines and find the most
+        // significant change type (Addition > Deletion > Context).
+        let range_start = row * diff_lines.len() / height;
+        let range_end = ((row + 1) * diff_lines.len() / height).min(diff_lines.len());
+        let mut has_addition = false;
+        let mut has_deletion = false;
+        for i in range_start..range_end.max(range_start + 1) {
+            match diff_lines[i.min(diff_lines.len() - 1)].line_type {
+                LineType::Addition => has_addition = true,
+                LineType::Deletion => has_deletion = true,
+                _ => {}
+            }
+        }
+
+        let is_thumb = row >= thumb_start && row < thumb_end;
+
+        let (ch, fg, bg) = if has_addition {
+            if is_thumb {
+                ("▐", Color::Green, Color::DarkGray)
+            } else {
+                ("▐", Color::Green, Color::Reset)
+            }
+        } else if has_deletion {
+            if is_thumb {
+                ("▐", Color::Red, Color::DarkGray)
+            } else {
+                ("▐", Color::Red, Color::Reset)
+            }
+        } else if is_thumb {
+            ("█", Color::DarkGray, Color::Reset)
+        } else {
+            ("│", Color::Rgb(40, 40, 40), Color::Reset)
+        };
+
+        let y = inner.y + row as u16;
+        if y < inner.y + inner.height {
+            let cell = &mut buf[(col, y)];
+            cell.set_symbol(ch);
+            cell.set_style(Style::default().fg(fg).bg(bg));
+        }
+    }
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -193,7 +284,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Commenting => " typing comment... | Enter: save | Esc: cancel".to_string(),
         Mode::Summary => format!(
             " summary: {}_  | Enter: save | Esc: cancel",
-            app.input_buffer
+            app.input_text()
         ),
     };
 
@@ -465,7 +556,7 @@ mod tests {
         app.select_file_with_diff(0, Some(make_test_diff()));
         app.mode = Mode::Commenting;
         app.commenting_line = Some(0);
-        app.input_buffer = "my comment".to_string();
+        app.start_input("my comment");
 
         terminal.draw(|frame| render(frame, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -586,8 +677,8 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(vec![]);
+        app.start_input("my summary");
         app.mode = Mode::Summary;
-        app.input_buffer = "my summary".to_string();
 
         terminal.draw(|frame| render(frame, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
