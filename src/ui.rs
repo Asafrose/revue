@@ -1,7 +1,7 @@
 use crate::app::{App, Mode};
+use crate::diff::DiffLine;
 use crate::diff::LineType;
 use crate::git::ChangeType;
-use crate::diff::DiffLine;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -172,7 +172,14 @@ fn render_diff(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Render change map (scrollbar with colored change indicators)
     if total_lines > 0 {
-        render_change_map(frame, &all_diff_lines, total_lines, visible_height, app.diff_scroll, inner);
+        render_change_map(
+            frame,
+            &all_diff_lines,
+            total_lines,
+            visible_height,
+            app.diff_scroll,
+            inner,
+        );
     }
 }
 
