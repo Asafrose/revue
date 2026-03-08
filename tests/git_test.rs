@@ -1,6 +1,7 @@
 use std::process::Command;
 
 #[test]
+#[ignore] // requires local main branch; skipped in CI
 fn test_git_diff_stat_parses() {
     let output = Command::new("git")
         .args(["diff", "--stat", "main...HEAD"])
