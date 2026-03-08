@@ -1,3 +1,4 @@
+use super::comment_card::CommentCard;
 use crate::app::{App, Mode};
 use crate::diff::DiffLine;
 use crate::diff::LineType;
@@ -121,6 +122,9 @@ impl StatefulWidget for DiffWidget {
         });
         let mut highlighter = highlighter;
 
+        // Card width for comment boxes (inner width minus padding)
+        let card_width = inner.width.saturating_sub(8) as usize;
+
         let mut lines: Vec<Line> = Vec::new();
         let file_comments = state
             .current_file
@@ -203,29 +207,20 @@ impl StatefulWidget for DiffWidget {
 
             lines.push(Line::from(spans));
 
-            // Render inline comments for this line
+            // Render inline comments as cards
             if let Some(comments) = file_comments {
                 for comment in comments.iter().filter(|c| c.line_index == idx) {
-                    lines.push(Line::from(vec![
-                        Span::styled("       > ", Style::default().fg(Color::Magenta)),
-                        Span::styled(
-                            comment.text.clone(),
-                            Style::default()
-                                .fg(Color::Magenta)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ]));
+                    let card = CommentCard::new(&comment.text, Color::Magenta, card_width);
+                    lines.extend(card.to_lines());
                 }
             }
 
-            // Show input line if commenting on this line
+            // Show input card if commenting on this line
             if state.mode == Mode::Commenting && state.commenting_line == Some(idx) {
                 let text = state.input_text();
-                lines.push(Line::from(vec![
-                    Span::styled("       > ", Style::default().fg(Color::Yellow)),
-                    Span::styled(text, Style::default().fg(Color::Yellow)),
-                    Span::styled("_", Style::default().fg(Color::Yellow)),
-                ]));
+                let card = CommentCard::new(&text, Color::Yellow, card_width)
+                    .hint("Enter: save │ Esc: cancel");
+                lines.extend(card.to_lines());
             }
         }
 

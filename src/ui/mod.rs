@@ -1,3 +1,4 @@
+mod comment_card;
 mod diff;
 mod file_list;
 mod status_bar;
@@ -282,7 +283,7 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
 
         assert!(buffer_contains(&buffer, "my comment"));
-        assert!(buffer_contains(&buffer, "_")); // cursor
+        assert!(buffer_contains(&buffer, "Enter: save")); // hint in card border
     }
 
     #[test]
@@ -389,7 +390,7 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
 
         assert!(buffer_contains(&buffer, "review note here"));
-        assert!(buffer_contains(&buffer, ">"));
+        assert!(buffer_contains(&buffer, "comment"));
     }
 
     #[test]
