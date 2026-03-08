@@ -2,6 +2,8 @@ use crate::diff::FileDiff;
 use crate::git::ChangedFile;
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
 use tui_textarea::{CursorMove, TextArea};
 
 #[derive(Debug, Clone)]
@@ -24,6 +26,8 @@ pub struct App {
     pub commenting_line: Option<usize>,
     pub should_quit: bool,
     pub status_message: Option<String>,
+    pub syntax_set: SyntaxSet,
+    pub theme_set: ThemeSet,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +57,8 @@ impl App {
             commenting_line: None,
             should_quit: false,
             status_message: None,
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme_set: ThemeSet::load_defaults(),
         }
     }
 
