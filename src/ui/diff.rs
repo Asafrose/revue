@@ -224,8 +224,13 @@ impl StatefulWidget for DiffWidget {
                     .as_ref()
                     .map(|ta| ta.cursor())
                     .unwrap_or((0, 0));
+                let hint = if state.editing_comment.is_some() {
+                    "⏎ save │ Ctrl+D delete │ Esc cancel"
+                } else {
+                    "⏎ save │ Alt+⏎ newline │ Esc cancel"
+                };
                 let card = CommentCard::new(&text, Color::Yellow, card_width)
-                    .hint("⏎ save │ Alt+⏎ newline │ Esc cancel")
+                    .hint(hint)
                     .cursor(crow, ccol, cursor_visible);
                 lines.extend(card.to_lines());
             }

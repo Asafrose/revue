@@ -140,9 +140,13 @@ fn handle_commenting_key(app: &mut App, key: KeyEvent) {
             }
         }
         (KeyCode::Enter, _) => app.submit_comment(),
+        (KeyCode::Char('d'), m) if m.contains(KeyModifiers::CONTROL) => {
+            app.delete_comment();
+        }
         (KeyCode::Esc, _) => {
             app.clear_input();
             app.commenting_line = None;
+            app.editing_comment = None;
             app.mode = Mode::Normal;
         }
         _ => {
@@ -223,9 +227,21 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
     {
         let clicked_row = (row - diff_inner.y) as usize + app.diff_scroll;
         if let Some(line_idx) = map_row_to_diff_line(app, clicked_row) {
+            // Check if there's an existing comment on this line to edit
+            let existing = app.current_file.as_ref().and_then(|file| {
+                let comments = app.comments.get(file)?;
+                let idx = comments.iter().position(|c| c.line_index == line_idx)?;
+                Some((file.clone(), idx, comments[idx].text.clone()))
+            });
             app.commenting_line = Some(line_idx);
             app.mode = Mode::Commenting;
-            app.start_input("");
+            if let Some((file, idx, text)) = existing {
+                app.editing_comment = Some((file, idx));
+                app.start_input(&text);
+            } else {
+                app.editing_comment = None;
+                app.start_input("");
+            }
         }
     }
 }
