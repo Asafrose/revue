@@ -25,6 +25,8 @@ pub struct App {
     pub diff_scroll: usize,
     pub diff_hscroll: usize,
     pub commenting_line: Option<usize>,
+    /// When editing an existing comment, tracks (file_path, index in comments vec).
+    pub editing_comment: Option<(String, usize)>,
     pub should_quit: bool,
     pub status_message: Option<String>,
     pub syntax_set: SyntaxSet,
@@ -57,6 +59,7 @@ impl App {
             diff_scroll: 0,
             diff_hscroll: 0,
             commenting_line: None,
+            editing_comment: None,
             should_quit: false,
             status_message: None,
             syntax_set: SyntaxSet::load_defaults_newlines(),
@@ -111,8 +114,26 @@ impl App {
     }
 
     pub fn submit_comment(&mut self) {
-        if let (Some(line_idx), Some(file)) = (self.commenting_line, &self.current_file) {
-            let text = self.input_text();
+        let text = self.input_text();
+        if let Some((ref file, idx)) = self.editing_comment {
+            // Editing existing comment
+            if text.is_empty() {
+                // Empty text deletes the comment
+                if let Some(comments) = self.comments.get_mut(file) {
+                    if idx < comments.len() {
+                        comments.remove(idx);
+                    }
+                    if comments.is_empty() {
+                        self.comments.remove(file);
+                    }
+                }
+            } else if let Some(comments) = self.comments.get_mut(file) {
+                if idx < comments.len() {
+                    comments[idx].text = text;
+                }
+            }
+        } else if let (Some(line_idx), Some(file)) = (self.commenting_line, &self.current_file) {
+            // New comment
             if !text.is_empty() {
                 let comment = ReviewComment {
                     line_index: line_idx,
@@ -123,6 +144,24 @@ impl App {
         }
         self.clear_input();
         self.commenting_line = None;
+        self.editing_comment = None;
+        self.mode = Mode::Normal;
+    }
+
+    pub fn delete_comment(&mut self) {
+        if let Some((ref file, idx)) = self.editing_comment {
+            if let Some(comments) = self.comments.get_mut(file) {
+                if idx < comments.len() {
+                    comments.remove(idx);
+                }
+                if comments.is_empty() {
+                    self.comments.remove(file);
+                }
+            }
+        }
+        self.clear_input();
+        self.commenting_line = None;
+        self.editing_comment = None;
         self.mode = Mode::Normal;
     }
 
