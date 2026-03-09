@@ -41,6 +41,8 @@ pub struct App {
     /// The OID of the main branch commit (base for diffs).
     pub main_oid: Option<Oid>,
     pub file_scroll: usize,
+    pub sidebar_width: u16,
+    pub dragging_sidebar: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +81,8 @@ impl App {
             commit_list_state: ListState::default(),
             main_oid: None,
             file_scroll: 0,
+            sidebar_width: crate::ui::DEFAULT_SIDEBAR_WIDTH,
+            dragging_sidebar: false,
         }
     }
 

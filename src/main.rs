@@ -200,6 +200,14 @@ fn handle_mouse(
         MouseEventKind::Down(MouseButton::Left) => {
             handle_mouse_click(app, mouse.column, mouse.row, frame_size);
         }
+        MouseEventKind::Drag(MouseButton::Left) if app.dragging_sidebar => {
+            // Dragging: sidebar width = frame_width - mouse column
+            let new_width = frame_size.width.saturating_sub(mouse.column);
+            app.sidebar_width = ui::clamp_sidebar_width(new_width, frame_size.width);
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            app.dragging_sidebar = false;
+        }
         MouseEventKind::ScrollUp => {
             app.diff_scroll = app.diff_scroll.saturating_sub(3);
         }
@@ -217,8 +225,17 @@ fn handle_mouse(
 }
 
 fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::layout::Rect) {
+    let sw = app.sidebar_width;
+
+    // Check if click is on the sidebar border (start drag)
+    let border_col = ui::sidebar_border_col(frame_size, sw);
+    if col == border_col || col == border_col.saturating_sub(1) {
+        app.dragging_sidebar = true;
+        return;
+    }
+
     // Check if click is in file list
-    let file_area = ui::file_list_area(frame_size);
+    let file_area = ui::file_list_area(frame_size, sw);
     if col >= file_area.x
         && col < file_area.x + file_area.width
         && row > file_area.y
@@ -236,7 +253,7 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
     }
 
     // Check if click is in commit list
-    let commit_area = ui::commit_list_area(frame_size);
+    let commit_area = ui::commit_list_area(frame_size, sw);
     if col >= commit_area.x
         && col < commit_area.x + commit_area.width
         && row > commit_area.y
@@ -252,7 +269,7 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
     }
 
     // Check if click is in diff area
-    let diff_inner = ui::diff_area(frame_size);
+    let diff_inner = ui::diff_area(frame_size, sw);
     if col >= diff_inner.x
         && col < diff_inner.x + diff_inner.width
         && row >= diff_inner.y
@@ -668,7 +685,7 @@ mod tests {
     #[test]
     fn mouse_click_file_list_selects_file() {
         let mut app = make_test_app();
-        let file_area = ui::file_list_area(frame_size());
+        let file_area = ui::file_list_area(frame_size(), ui::DEFAULT_SIDEBAR_WIDTH);
         // Click on the second file (row = file_area.y + 1 for border + 1 for second item)
         let click_col = file_area.x + 1;
         let click_row = file_area.y + 2; // border row + first item row -> second item
@@ -681,7 +698,7 @@ mod tests {
     #[test]
     fn mouse_click_diff_area_starts_commenting() {
         let mut app = make_test_app();
-        let diff_inner = ui::diff_area(frame_size());
+        let diff_inner = ui::diff_area(frame_size(), ui::DEFAULT_SIDEBAR_WIDTH);
         // Click on the first visible row of the diff
         let click_col = diff_inner.x + 1;
         let click_row = diff_inner.y;
@@ -699,7 +716,7 @@ mod tests {
         let mut app = make_test_app();
         app.mode = Mode::Commenting;
         app.commenting_line = Some(0);
-        let diff_inner = ui::diff_area(frame_size());
+        let diff_inner = ui::diff_area(frame_size(), ui::DEFAULT_SIDEBAR_WIDTH);
         let click_col = diff_inner.x + 1;
         let click_row = diff_inner.y;
         handle_event(&mut app, mouse_click(click_col, click_row), frame_size());

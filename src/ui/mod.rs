@@ -12,8 +12,12 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::Frame;
 use status_bar::StatusBarWidget;
 
-/// Width of the sidebar (file list + commit list)
-const SIDEBAR_WIDTH: u16 = 28;
+/// Default width of the sidebar (file list + commit list)
+pub const DEFAULT_SIDEBAR_WIDTH: u16 = 28;
+/// Minimum sidebar width
+const MIN_SIDEBAR_WIDTH: u16 = 16;
+/// Minimum diff pane width
+const MIN_DIFF_WIDTH: u16 = 20;
 /// Height of the commit list pane
 const COMMIT_LIST_HEIGHT: u16 = 10;
 
@@ -21,9 +25,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let [main_area, status_area] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame.area());
 
+    let sidebar_w = app.sidebar_width;
     let [diff_area, sidebar_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
-            .areas(main_area);
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(sidebar_w)]).areas(main_area);
 
     let [files_area, commits_area] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(COMMIT_LIST_HEIGHT)])
@@ -55,11 +59,11 @@ pub(crate) fn short_path(path: &str) -> &str {
 }
 
 /// Compute sidebar layout areas.
-fn sidebar_areas(frame_area: Rect) -> (Rect, Rect) {
+fn sidebar_areas(frame_area: Rect, sidebar_width: u16) -> (Rect, Rect) {
     let [main_area, _status] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame_area);
     let [_diff, sidebar] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(sidebar_width)])
             .areas(main_area);
     let [files, commits] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(COMMIT_LIST_HEIGHT)])
@@ -68,22 +72,22 @@ fn sidebar_areas(frame_area: Rect) -> (Rect, Rect) {
 }
 
 /// Returns the area occupied by the file list panel.
-pub fn file_list_area(frame_area: Rect) -> Rect {
-    sidebar_areas(frame_area).0
+pub fn file_list_area(frame_area: Rect, sidebar_width: u16) -> Rect {
+    sidebar_areas(frame_area, sidebar_width).0
 }
 
 /// Returns the area occupied by the commit list panel.
-pub fn commit_list_area(frame_area: Rect) -> Rect {
-    sidebar_areas(frame_area).1
+pub fn commit_list_area(frame_area: Rect, sidebar_width: u16) -> Rect {
+    sidebar_areas(frame_area, sidebar_width).1
 }
 
 /// Returns the inner area of the diff panel (inside borders).
-pub fn diff_area(frame_area: Rect) -> Rect {
+pub fn diff_area(frame_area: Rect, sidebar_width: u16) -> Rect {
     let [main_area, _status] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame_area);
 
     let [diff, _sidebar] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(sidebar_width)])
             .areas(main_area);
 
     Rect {
@@ -92,6 +96,22 @@ pub fn diff_area(frame_area: Rect) -> Rect {
         width: diff.width.saturating_sub(2),
         height: diff.height.saturating_sub(2),
     }
+}
+
+/// Returns the column of the sidebar border (for drag detection).
+pub fn sidebar_border_col(frame_area: Rect, sidebar_width: u16) -> u16 {
+    let [main_area, _status] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame_area);
+    let [diff, _sidebar] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(sidebar_width)])
+            .areas(main_area);
+    diff.x + diff.width
+}
+
+/// Clamp sidebar width to valid range for a given frame width.
+pub fn clamp_sidebar_width(width: u16, frame_width: u16) -> u16 {
+    let max_width = frame_width.saturating_sub(MIN_DIFF_WIDTH);
+    width.clamp(MIN_SIDEBAR_WIDTH, max_width)
 }
 
 #[cfg(test)]
@@ -191,21 +211,21 @@ mod tests {
     #[test]
     fn file_list_area_standard_frame() {
         let frame = Rect::new(0, 0, 80, 24);
-        let area = file_list_area(frame);
-        assert_eq!(area.width, SIDEBAR_WIDTH);
+        let area = file_list_area(frame, DEFAULT_SIDEBAR_WIDTH);
+        assert_eq!(area.width, DEFAULT_SIDEBAR_WIDTH);
     }
 
     #[test]
     fn file_list_area_x_is_frame_width_minus_sidebar() {
         let frame = Rect::new(0, 0, 80, 24);
-        let area = file_list_area(frame);
-        assert_eq!(area.x, 80 - SIDEBAR_WIDTH);
+        let area = file_list_area(frame, DEFAULT_SIDEBAR_WIDTH);
+        assert_eq!(area.x, 80 - DEFAULT_SIDEBAR_WIDTH);
     }
 
     #[test]
     fn file_list_area_height_is_frame_minus_status_minus_commits() {
         let frame = Rect::new(0, 0, 80, 24);
-        let area = file_list_area(frame);
+        let area = file_list_area(frame, DEFAULT_SIDEBAR_WIDTH);
         // 24 - 3 (status bar) - COMMIT_LIST_HEIGHT
         assert_eq!(area.height, 24 - 3 - COMMIT_LIST_HEIGHT);
     }
@@ -215,7 +235,7 @@ mod tests {
     #[test]
     fn diff_area_standard_frame() {
         let frame = Rect::new(0, 0, 80, 24);
-        let area = diff_area(frame);
+        let area = diff_area(frame, DEFAULT_SIDEBAR_WIDTH);
         assert!(area.width > 0);
         assert!(area.height > 0);
     }
@@ -223,21 +243,21 @@ mod tests {
     #[test]
     fn diff_area_width_is_frame_minus_sidebar_minus_borders() {
         let frame = Rect::new(0, 0, 80, 24);
-        let area = diff_area(frame);
-        assert_eq!(area.width, 80 - SIDEBAR_WIDTH - 2);
+        let area = diff_area(frame, DEFAULT_SIDEBAR_WIDTH);
+        assert_eq!(area.width, 80 - DEFAULT_SIDEBAR_WIDTH - 2);
     }
 
     #[test]
     fn diff_area_height_is_frame_minus_status_minus_borders() {
         let frame = Rect::new(0, 0, 80, 24);
-        let area = diff_area(frame);
+        let area = diff_area(frame, DEFAULT_SIDEBAR_WIDTH);
         assert_eq!(area.height, 24 - 3 - 2);
     }
 
     #[test]
     fn diff_area_position() {
         let frame = Rect::new(0, 0, 80, 24);
-        let area = diff_area(frame);
+        let area = diff_area(frame, DEFAULT_SIDEBAR_WIDTH);
         assert_eq!(area.x, 1);
         assert_eq!(area.y, 1);
     }
