@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use git2::{Delta, Diff, DiffOptions, Patch, Repository};
+use git2::{Delta, Diff, DiffOptions, Oid, Patch, Repository};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -8,6 +8,13 @@ pub struct ChangedFile {
     pub change_type: ChangeType,
     pub additions: usize,
     pub deletions: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitInfo {
+    pub id: Oid,
+    pub short_id: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,12 +29,106 @@ fn open_repo() -> Result<Repository> {
     Repository::discover(".").context("Not a git repository")
 }
 
-fn main_tree(repo: &Repository) -> Result<git2::Tree<'_>> {
+fn main_commit(repo: &Repository) -> Result<git2::Commit<'_>> {
     let branch = repo
         .find_branch("main", git2::BranchType::Local)
         .context("Could not find 'main' branch")?;
-    let commit = branch.get().peel_to_commit()?;
-    Ok(commit.tree()?)
+    Ok(branch.get().peel_to_commit()?)
+}
+
+fn main_tree(repo: &Repository) -> Result<git2::Tree<'_>> {
+    Ok(main_commit(repo)?.tree()?)
+}
+
+/// List commits from HEAD back to (but not including) the main branch commit.
+/// Returns newest commit first.
+pub(crate) fn list_commits(repo: &Repository) -> Result<Vec<CommitInfo>> {
+    let main = main_commit(repo)?;
+    let head = repo.head()?.peel_to_commit()?;
+
+    let mut revwalk = repo.revwalk()?;
+    revwalk.push(head.id())?;
+    revwalk.hide(main.id())?;
+    revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+
+    let mut commits = Vec::new();
+    for oid in revwalk {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+        let short_id = oid.to_string()[..7].to_string();
+        let message = commit
+            .message()
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        commits.push(CommitInfo {
+            id: oid,
+            short_id,
+            message,
+        });
+    }
+    Ok(commits)
+}
+
+/// Compute diff between two tree-ish objects (commits).
+/// If `to_oid` is None, diffs to the working directory.
+pub(crate) fn diff_commit_range(
+    repo: &Repository,
+    from_oid: Oid,
+    to_oid: Option<Oid>,
+    context_lines: u32,
+) -> Result<Diff<'_>> {
+    let from_commit = repo.find_commit(from_oid)?;
+    let from_tree = from_commit.tree()?;
+    let mut opts = DiffOptions::new();
+    opts.context_lines(context_lines);
+    opts.include_untracked(true);
+    opts.show_untracked_content(true);
+    opts.recurse_untracked_dirs(true);
+
+    match to_oid {
+        Some(to) => {
+            let to_commit = repo.find_commit(to)?;
+            let to_tree = to_commit.tree()?;
+            repo.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), Some(&mut opts))
+                .context("Failed to diff commit range")
+        }
+        None => repo
+            .diff_tree_to_workdir_with_index(Some(&from_tree), Some(&mut opts))
+            .context("Failed to diff to working directory"),
+    }
+}
+
+/// Compute diff for a specific file within a commit range.
+pub(crate) fn diff_commit_range_file<'a>(
+    repo: &'a Repository,
+    from_oid: Oid,
+    to_oid: Option<Oid>,
+    path: &str,
+    context_lines: u32,
+) -> Result<Diff<'a>> {
+    let from_commit = repo.find_commit(from_oid)?;
+    let from_tree = from_commit.tree()?;
+    let mut opts = DiffOptions::new();
+    opts.pathspec(path);
+    opts.context_lines(context_lines);
+    opts.include_untracked(true);
+    opts.show_untracked_content(true);
+    opts.recurse_untracked_dirs(true);
+
+    match to_oid {
+        Some(to) => {
+            let to_commit = repo.find_commit(to)?;
+            let to_tree = to_commit.tree()?;
+            repo.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), Some(&mut opts))
+                .context("Failed to diff file in commit range")
+        }
+        None => repo
+            .diff_tree_to_workdir_with_index(Some(&from_tree), Some(&mut opts))
+            .context("Failed to diff file to working directory"),
+    }
 }
 
 fn diff_against_main(repo: &Repository, context_lines: u32) -> Result<Diff<'_>> {
@@ -107,6 +208,26 @@ pub fn get_changed_files() -> Result<Vec<ChangedFile>> {
 }
 
 #[cfg(not(tarpaulin_include))]
+pub fn get_changed_files_for_range(from: Oid, to: Option<Oid>) -> Result<Vec<ChangedFile>> {
+    let repo = open_repo()?;
+    let diff = diff_commit_range(&repo, from, to, 3)?;
+    Ok(changed_files_from_diff(&diff))
+}
+
+#[cfg(not(tarpaulin_include))]
+pub fn get_commits() -> Result<Vec<CommitInfo>> {
+    let repo = open_repo()?;
+    list_commits(&repo)
+}
+
+#[cfg(not(tarpaulin_include))]
+pub fn get_main_oid() -> Result<Oid> {
+    let repo = open_repo()?;
+    let oid = main_commit(&repo)?.id();
+    Ok(oid)
+}
+
+#[cfg(not(tarpaulin_include))]
 pub fn get_file_diff(path: &str) -> Result<String> {
     let repo = open_repo()?;
     let tree = main_tree(&repo)?;
@@ -127,6 +248,18 @@ pub fn get_file_diff(path: &str) -> Result<String> {
         .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
         .context("Failed to compute file diff")?;
 
+    format_diff_patch(&diff)
+}
+
+#[cfg(not(tarpaulin_include))]
+pub fn get_file_diff_for_range(path: &str, from: Oid, to: Option<Oid>) -> Result<String> {
+    let repo = open_repo()?;
+
+    let line_count = std::fs::read_to_string(path)
+        .map(|s| s.lines().count())
+        .unwrap_or(0) as u32;
+
+    let diff = diff_commit_range_file(&repo, from, to, path, line_count)?;
     format_diff_patch(&diff)
 }
 
@@ -376,5 +509,78 @@ mod tests {
         // Context line for unchanged "hello" and addition of "new line"
         assert!(patch.contains(" hello"));
         assert!(patch.contains("+new line"));
+    }
+
+    // ── commit helpers ──────────────────────────────────────────────
+
+    /// Create a commit on HEAD in the given repo.
+    fn make_commit(dir: &std::path::Path, repo: &Repository, filename: &str, content: &str) {
+        fs::write(dir.join(filename), content).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(filename)).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = repo.signature().unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            &format!("add {}", filename),
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    }
+
+    // ── list_commits ────────────────────────────────────────────────
+
+    #[test]
+    fn list_commits_no_commits_beyond_main() {
+        let (_dir, repo) = setup_repo();
+        let commits = list_commits(&repo).unwrap();
+        assert!(commits.is_empty());
+    }
+
+    #[test]
+    fn list_commits_returns_commits_after_main() {
+        let (dir, repo) = setup_repo();
+        make_commit(dir.path(), &repo, "a.txt", "aaa\n");
+        make_commit(dir.path(), &repo, "b.txt", "bbb\n");
+
+        let commits = list_commits(&repo).unwrap();
+        assert_eq!(commits.len(), 2);
+        // Newest first
+        assert!(commits[0].message.contains("add b.txt"));
+        assert!(commits[1].message.contains("add a.txt"));
+        assert_eq!(commits[0].short_id.len(), 7);
+    }
+
+    // ── diff_commit_range ───────────────────────────────────────────
+
+    #[test]
+    fn diff_commit_range_between_two_commits() {
+        let (dir, repo) = setup_repo();
+        make_commit(dir.path(), &repo, "a.txt", "aaa\n");
+        let commits = list_commits(&repo).unwrap();
+        let main_oid = main_commit(&repo).unwrap().id();
+
+        let diff = diff_commit_range(&repo, main_oid, Some(commits[0].id), 3).unwrap();
+        let files = changed_files_from_diff(&diff);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "a.txt");
+    }
+
+    #[test]
+    fn diff_commit_range_to_working_dir() {
+        let (dir, repo) = setup_repo();
+        fs::write(dir.path().join("initial.txt"), "changed\n").unwrap();
+        let main_oid = main_commit(&repo).unwrap().id();
+
+        let diff = diff_commit_range(&repo, main_oid, None, 3).unwrap();
+        let files = changed_files_from_diff(&diff);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].change_type, ChangeType::Modified);
     }
 }

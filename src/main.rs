@@ -25,6 +25,11 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let mut app = App::new(files);
 
+    // Load commits and main OID
+    if let (Ok(commits), Ok(main_oid)) = (git::get_commits(), git::get_main_oid()) {
+        app.set_commits(commits, main_oid);
+    }
+
     if !app.files.is_empty() {
         app.select_file(0);
     }
@@ -110,7 +115,7 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
                     0
                 }
             });
-            app.select_file(next);
+            select_file(app, next);
         }
         KeyCode::BackTab => {
             let prev = app.file_list_state.selected().map_or(0, |i| {
@@ -120,11 +125,19 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
                     i - 1
                 }
             });
-            app.select_file(prev);
+            select_file(app, prev);
         }
         KeyCode::Char('r') => {
-            if let Ok(files) = git::get_changed_files() {
-                refresh_file_list(app, files);
+            if app.commits.is_empty() {
+                if let Ok(files) = git::get_changed_files() {
+                    refresh_file_list(app, files);
+                }
+            } else {
+                // Reload commits and files
+                if let (Ok(commits), Ok(main_oid)) = (git::get_commits(), git::get_main_oid()) {
+                    app.set_commits(commits, main_oid);
+                }
+                app.reload_files_for_selection();
             }
         }
         _ => {}
@@ -211,9 +224,29 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
         && row > file_area.y
         && row < file_area.y + file_area.height - 1
     {
-        let index = (row - file_area.y - 1) as usize;
+        let index = (row - file_area.y - 1) as usize + app.file_scroll;
         if index < app.files.len() {
-            app.select_file(index);
+            if app.commits.is_empty() {
+                app.select_file(index);
+            } else {
+                app.select_file_for_range(index);
+            }
+        }
+        return;
+    }
+
+    // Check if click is in commit list
+    let commit_area = ui::commit_list_area(frame_size);
+    if col >= commit_area.x
+        && col < commit_area.x + commit_area.width
+        && row > commit_area.y
+        && row < commit_area.y + commit_area.height - 1
+    {
+        let index = (row - commit_area.y - 1) as usize;
+        if index < app.commits.len() {
+            app.commit_list_state.select(Some(index));
+            app.toggle_commit(index);
+            app.reload_files_for_selection();
         }
         return;
     }
@@ -243,6 +276,15 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
                 app.start_input("");
             }
         }
+    }
+}
+
+/// Select a file using commit-range-aware or plain method.
+fn select_file(app: &mut App, index: usize) {
+    if app.commits.is_empty() {
+        app.select_file(index);
+    } else {
+        app.select_file_for_range(index);
     }
 }
 
@@ -316,15 +358,6 @@ mod tests {
         Event::Key(KeyEvent {
             code,
             modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        })
-    }
-
-    fn ctrl_key_event(code: KeyCode) -> Event {
-        Event::Key(KeyEvent {
-            code,
-            modifiers: KeyModifiers::CONTROL,
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         })

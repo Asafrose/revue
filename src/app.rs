@@ -1,5 +1,6 @@
 use crate::diff::FileDiff;
-use crate::git::ChangedFile;
+use crate::git::{ChangedFile, CommitInfo};
+use git2::Oid;
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -32,6 +33,14 @@ pub struct App {
     pub syntax_set: SyntaxSet,
     pub theme_set: ThemeSet,
     pub cursor_blink_start: Instant,
+    /// Commits between main and HEAD, newest first.
+    pub commits: Vec<CommitInfo>,
+    /// Which commits are selected (by index into `commits`). All selected by default.
+    pub selected_commits: Vec<bool>,
+    pub commit_list_state: ListState,
+    /// The OID of the main branch commit (base for diffs).
+    pub main_oid: Option<Oid>,
+    pub file_scroll: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +74,11 @@ impl App {
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
             cursor_blink_start: Instant::now(),
+            commits: Vec::new(),
+            selected_commits: Vec::new(),
+            commit_list_state: ListState::default(),
+            main_oid: None,
+            file_scroll: 0,
         }
     }
 
@@ -173,6 +187,106 @@ impl App {
 
     pub fn file_comment_count(&self, path: &str) -> usize {
         self.comments.get(path).map_or(0, |c| c.len())
+    }
+
+    pub fn set_commits(&mut self, commits: Vec<CommitInfo>, main_oid: Oid) {
+        let count = commits.len();
+        self.commits = commits;
+        self.selected_commits = vec![true; count];
+        self.main_oid = Some(main_oid);
+        if count > 0 {
+            self.commit_list_state.select(Some(0));
+        }
+    }
+
+    pub fn toggle_commit(&mut self, index: usize) {
+        if index < self.selected_commits.len() {
+            self.selected_commits[index] = !self.selected_commits[index];
+        }
+    }
+
+    /// Returns the "from" OID for diffing based on selected commits.
+    /// This is the parent of the oldest selected commit, or main if the oldest is selected.
+    /// Returns None if no commits are selected (falls back to main diff).
+    pub fn diff_from_oid(&self) -> Option<Oid> {
+        if self.commits.is_empty() {
+            return self.main_oid;
+        }
+        // If no commits selected, diff everything against main
+        if !self.selected_commits.iter().any(|&s| s) {
+            return self.main_oid;
+        }
+        // Find the oldest selected commit (last in vec since newest-first)
+        let oldest_idx = self
+            .selected_commits
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, &s)| s)
+            .map(|(i, _)| i)?;
+        // The "from" is the parent of the oldest selected commit,
+        // which is the commit just after it in our list (older), or main_oid
+        if oldest_idx + 1 < self.commits.len() {
+            Some(self.commits[oldest_idx + 1].id)
+        } else {
+            self.main_oid
+        }
+    }
+
+    /// Returns the "to" OID for diffing. None means diff to working directory.
+    /// If the newest selected commit is not the first one, we diff up to that commit.
+    pub fn diff_to_oid(&self) -> Option<Oid> {
+        if self.commits.is_empty() {
+            return None; // working dir
+        }
+        if !self.selected_commits.iter().any(|&s| s) {
+            return None; // working dir
+        }
+        // Find newest selected commit
+        let newest_idx = self.selected_commits.iter().position(|&s| s)?;
+        if newest_idx == 0 {
+            // Newest commit selected — include working dir changes
+            None
+        } else {
+            Some(self.commits[newest_idx].id)
+        }
+    }
+
+    /// Reload file list based on current commit selection.
+    pub fn reload_files_for_selection(&mut self) {
+        let from = self.diff_from_oid();
+        let to = self.diff_to_oid();
+        if let Some(from) = from {
+            if let Ok(files) = crate::git::get_changed_files_for_range(from, to) {
+                self.files = files;
+                self.file_list_state = ListState::default();
+                if !self.files.is_empty() {
+                    self.file_list_state.select(Some(0));
+                }
+                self.current_diff = None;
+                self.current_file = None;
+                self.file_scroll = 0;
+            }
+        }
+    }
+
+    /// Select a file using the current commit range for diff.
+    pub fn select_file_for_range(&mut self, index: usize) {
+        if index < self.files.len() {
+            let path = self.files[index].path.clone();
+            let from = self.diff_from_oid();
+            let to = self.diff_to_oid();
+            let diff = from.and_then(|f| {
+                crate::git::get_file_diff_for_range(&path, f, to)
+                    .ok()
+                    .map(|raw| crate::diff::parse_diff(&raw))
+            });
+            self.file_list_state.select(Some(index));
+            self.current_file = Some(path);
+            self.current_diff = diff;
+            self.diff_scroll = 0;
+            self.diff_hscroll = 0;
+        }
     }
 }
 
