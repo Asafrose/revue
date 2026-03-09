@@ -1,27 +1,36 @@
 mod comment_card;
+mod commit_list;
 mod diff;
 mod file_list;
 mod status_bar;
 
 use crate::app::App;
+use commit_list::CommitListWidget;
 use diff::DiffWidget;
 use file_list::FileListWidget;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::Frame;
 use status_bar::StatusBarWidget;
 
-/// Width of the file list sidebar
-const FILE_LIST_WIDTH: u16 = 22;
+/// Width of the sidebar (file list + commit list)
+const SIDEBAR_WIDTH: u16 = 28;
+/// Height of the commit list pane
+const COMMIT_LIST_HEIGHT: u16 = 10;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let [main_area, status_area] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame.area());
 
-    let [diff_area, file_list_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(FILE_LIST_WIDTH)])
+    let [diff_area, sidebar_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
             .areas(main_area);
 
-    frame.render_stateful_widget(FileListWidget, file_list_area, app);
+    let [files_area, commits_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(COMMIT_LIST_HEIGHT)])
+            .areas(sidebar_area);
+
+    frame.render_stateful_widget(FileListWidget, files_area, app);
+    frame.render_stateful_widget(CommitListWidget, commits_area, app);
     frame.render_stateful_widget(DiffWidget, diff_area, app);
     frame.render_widget(StatusBarWidget::new(app), status_area);
 }
@@ -45,16 +54,27 @@ pub(crate) fn short_path(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Returns the area occupied by the file list panel.
-pub fn file_list_area(frame_area: Rect) -> Rect {
+/// Compute sidebar layout areas.
+fn sidebar_areas(frame_area: Rect) -> (Rect, Rect) {
     let [main_area, _status] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame_area);
-
-    let [_diff, file_list] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(FILE_LIST_WIDTH)])
+    let [_diff, sidebar] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
             .areas(main_area);
+    let [files, commits] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(COMMIT_LIST_HEIGHT)])
+            .areas(sidebar);
+    (files, commits)
+}
 
-    file_list
+/// Returns the area occupied by the file list panel.
+pub fn file_list_area(frame_area: Rect) -> Rect {
+    sidebar_areas(frame_area).0
+}
+
+/// Returns the area occupied by the commit list panel.
+pub fn commit_list_area(frame_area: Rect) -> Rect {
+    sidebar_areas(frame_area).1
 }
 
 /// Returns the inner area of the diff panel (inside borders).
@@ -62,8 +82,8 @@ pub fn diff_area(frame_area: Rect) -> Rect {
     let [main_area, _status] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(frame_area);
 
-    let [diff, _file_list] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(FILE_LIST_WIDTH)])
+    let [diff, _sidebar] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
             .areas(main_area);
 
     Rect {
@@ -172,21 +192,22 @@ mod tests {
     fn file_list_area_standard_frame() {
         let frame = Rect::new(0, 0, 80, 24);
         let area = file_list_area(frame);
-        assert_eq!(area.width, FILE_LIST_WIDTH);
+        assert_eq!(area.width, SIDEBAR_WIDTH);
     }
 
     #[test]
     fn file_list_area_x_is_frame_width_minus_sidebar() {
         let frame = Rect::new(0, 0, 80, 24);
         let area = file_list_area(frame);
-        assert_eq!(area.x, 80 - FILE_LIST_WIDTH);
+        assert_eq!(area.x, 80 - SIDEBAR_WIDTH);
     }
 
     #[test]
-    fn file_list_area_height_is_frame_height_minus_3() {
+    fn file_list_area_height_is_frame_minus_status_minus_commits() {
         let frame = Rect::new(0, 0, 80, 24);
         let area = file_list_area(frame);
-        assert_eq!(area.height, 24 - 3);
+        // 24 - 3 (status bar) - COMMIT_LIST_HEIGHT
+        assert_eq!(area.height, 24 - 3 - COMMIT_LIST_HEIGHT);
     }
 
     // ── diff_area tests ──────────────────────────────────────────────
@@ -203,7 +224,7 @@ mod tests {
     fn diff_area_width_is_frame_minus_sidebar_minus_borders() {
         let frame = Rect::new(0, 0, 80, 24);
         let area = diff_area(frame);
-        assert_eq!(area.width, 80 - FILE_LIST_WIDTH - 2);
+        assert_eq!(area.width, 80 - SIDEBAR_WIDTH - 2);
     }
 
     #[test]
