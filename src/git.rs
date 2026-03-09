@@ -55,7 +55,7 @@ pub(crate) fn list_commits(repo: &Repository) -> Result<Vec<CommitInfo>> {
     for oid in revwalk {
         let oid = oid?;
         let commit = repo.find_commit(oid)?;
-        let short_id = format!("{}", &oid.to_string()[..7]);
+        let short_id = oid.to_string()[..7].to_string();
         let message = commit
             .message()
             .unwrap_or("")
