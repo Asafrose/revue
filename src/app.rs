@@ -43,6 +43,8 @@ pub struct App {
     pub file_scroll: usize,
     pub sidebar_width: u16,
     pub dragging_sidebar: bool,
+    /// Last click position and time for double-click detection.
+    pub last_click: Option<(u16, u16, Instant)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +85,7 @@ impl App {
             file_scroll: 0,
             sidebar_width: crate::ui::DEFAULT_SIDEBAR_WIDTH,
             dragging_sidebar: false,
+            last_click: None,
         }
     }
 

@@ -268,30 +268,38 @@ fn handle_mouse_click(app: &mut App, col: u16, row: u16, frame_size: ratatui::la
         return;
     }
 
-    // Check if click is in diff area
+    // Check if click is in diff area — double-click to comment
     let diff_inner = ui::diff_area(frame_size, sw);
     if col >= diff_inner.x
         && col < diff_inner.x + diff_inner.width
         && row >= diff_inner.y
         && row < diff_inner.y + diff_inner.height
     {
-        let clicked_row = (row - diff_inner.y) as usize + app.diff_scroll;
-        if let Some(line_idx) = map_row_to_diff_line(app, clicked_row) {
-            // Check if there's an existing comment on this line to edit
-            let existing = app.current_file.as_ref().and_then(|file| {
-                let comments = app.comments.get(file)?;
-                let idx = comments.iter().position(|c| c.line_index == line_idx)?;
-                Some((file.clone(), idx, comments[idx].text.clone()))
-            });
-            app.commenting_line = Some(line_idx);
-            app.mode = Mode::Commenting;
-            if let Some((file, idx, text)) = existing {
-                app.editing_comment = Some((file, idx));
-                app.start_input(&text);
-            } else {
-                app.editing_comment = None;
-                app.start_input("");
+        let is_double_click = app
+            .last_click
+            .map(|(lc, lr, lt)| lc == col && lr == row && lt.elapsed().as_millis() < 400)
+            .unwrap_or(false);
+        app.last_click = Some((col, row, std::time::Instant::now()));
+
+        if is_double_click {
+            let clicked_row = (row - diff_inner.y) as usize + app.diff_scroll;
+            if let Some(line_idx) = map_row_to_diff_line(app, clicked_row) {
+                let existing = app.current_file.as_ref().and_then(|file| {
+                    let comments = app.comments.get(file)?;
+                    let idx = comments.iter().position(|c| c.line_index == line_idx)?;
+                    Some((file.clone(), idx, comments[idx].text.clone()))
+                });
+                app.commenting_line = Some(line_idx);
+                app.mode = Mode::Commenting;
+                if let Some((file, idx, text)) = existing {
+                    app.editing_comment = Some((file, idx));
+                    app.start_input(&text);
+                } else {
+                    app.editing_comment = None;
+                    app.start_input("");
+                }
             }
+            app.last_click = None; // Reset after double-click
         }
     }
 }
@@ -693,20 +701,33 @@ mod tests {
         assert_eq!(app.file_list_state.selected(), Some(1));
     }
 
-    // ── Mouse: click in diff area starts commenting ──────────────────
+    // ── Mouse: double-click in diff area starts commenting ─────────────
 
     #[test]
-    fn mouse_click_diff_area_starts_commenting() {
+    fn mouse_double_click_diff_area_starts_commenting() {
         let mut app = make_test_app();
         let diff_inner = ui::diff_area(frame_size(), ui::DEFAULT_SIDEBAR_WIDTH);
-        // Click on the first visible row of the diff
         let click_col = diff_inner.x + 1;
         let click_row = diff_inner.y;
+        // First click — no comment mode
+        handle_event(&mut app, mouse_click(click_col, click_row), frame_size());
+        assert_eq!(app.mode, Mode::Normal);
+        // Second click (double-click) — opens comment
         handle_event(&mut app, mouse_click(click_col, click_row), frame_size());
         assert_eq!(app.mode, Mode::Commenting);
         assert!(app.commenting_line.is_some());
         assert!(app.textarea.is_some());
         assert_eq!(app.input_text(), "");
+    }
+
+    #[test]
+    fn mouse_single_click_diff_area_does_not_comment() {
+        let mut app = make_test_app();
+        let diff_inner = ui::diff_area(frame_size(), ui::DEFAULT_SIDEBAR_WIDTH);
+        let click_col = diff_inner.x + 1;
+        let click_row = diff_inner.y;
+        handle_event(&mut app, mouse_click(click_col, click_row), frame_size());
+        assert_eq!(app.mode, Mode::Normal);
     }
 
     // ── Mouse: events ignored when not in Normal mode ────────────────
